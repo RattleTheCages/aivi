@@ -1,0 +1,28 @@
+QuickSpellEditor: Write, Correct, Toggle, Perfect
+
+QuickSpellEditor is an application that enhances your writing experience. As you craft your text, it provides real-time spelling and grammar corrections. It's like having a personal proofreader who's always there as you type, making the writing process smoother and more enjoyable. This tool is designed for everyone, making it easy to create well-written content, regardless of your technical background.
+
+What is great about QuickSpellEditor its intuitive design. With just a press of the backslash key, conveniently located above the Enter key, your text is sent for AI review and the suggestions are displayed instantly. If you're unsure about the changes, you can easily toggle between your original text and the AI's suggestions using the backspace key, which is just above the backslash key. This effortless back-and-forth allows you to compare and choose what fits best for your writing, giving you quick control over your content.
+
+
+      _____________
+     / ___________ \
+    | | BACKSPACE | | Backspace to toggle between original and corrections.
+    | |___________| |
+     \_____________/
+       ____________
+      / __________ \
+     | |BACKSLASH | | 
+     | |    \     | | Backslash to correct your text with AI.
+     | |__________| |
+      \____________/
+  _________________
+ / _______________ \
+| |     ENTER     | | Enter to write and edit.
+| |_______________| |
+ \_________________/`
+
+
+I, Rattle, hereby assert that I am the original innovator of a unique Artificial Intelligence (AI) feature known as the ‘AI Quick Key’. This feature, characterized by the innovative use of the backslash (‘\’) key, located above the enter key on standard keyboards, and the backspace key, allows users to effortlessly toggle between AI-generated corrections and the original text input. As the first to develop and implement this feature, I maintain that the rights to this innovation are intrinsically tied to its creation. This statement serves as a formal acknowledgment of my original contribution to this innovation and my intent to protect it under the applicable intellectual property laws and regulations.
+
+ 
