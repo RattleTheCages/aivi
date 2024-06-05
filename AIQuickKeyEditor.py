@@ -141,6 +141,8 @@ class AIQuickKeyEditor:
         self.status = ""
         self.oldtext = {}
         self.clipboard = []
+        self.yanked_lines = set()
+        self.yank_mode_active = False
         self.context_window = 0
         self.search_results = []
         self.current_search_result = -1
@@ -157,6 +159,7 @@ class AIQuickKeyEditor:
             self.read_file()
         else:
             self.show_splash_screen()
+
     def handle_return(self):
         current_window = self.windows[self.context_window]
         line = current_window["text"][current_window["line_num"]]
@@ -172,13 +175,14 @@ class AIQuickKeyEditor:
         if self.status != "":
             modeOrStatus = self.status
             self.status = ""
-        self.stdscr.clear()
         top_window = self.windows[0]["text"]
         bottom_window = self.windows[1]["text"]
+        self.stdscr.clear()
         for y in range(min(38, len(top_window) - self.window_offsets[0])):
             line = top_window[y + self.window_offsets[0]]
+            highlight = curses.A_REVERSE | curses.A_BOLD if self.context_window == 0 and y + self.window_offsets[0] in self.yanked_lines else curses.A_REVERSE
             try:
-                self.stdscr.addstr(y, 0, f"{y + self.window_offsets[0]:03}<{modeOrStatus:5}>", curses.A_REVERSE | curses.A_BOLD if self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"] else curses.A_REVERSE)
+                self.stdscr.addstr(y, 0, f"{y + self.window_offsets[0]:03}<{modeOrStatus:5}>", highlight)
                 if self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[0]["col_num"]:
@@ -190,14 +194,15 @@ class AIQuickKeyEditor:
                 else:
                     self.stdscr.addstr(line)
             except curses.error:
-                pass  # Prevent crash due to writing outside of the window size
-        # Bottom window
+                pass
+
         for y in range(38, 48):
             if y - 38 >= len(bottom_window) - self.window_offsets[1]:
                 break
+            highlight = curses.A_REVERSE | curses.A_BOLD if self.context_window == 1 and y - 38 + self.window_offsets[1] in self.yanked_lines else curses.A_REVERSE
             line = bottom_window[y - 38 + self.window_offsets[1]]
             try:
-                self.stdscr.addstr(y, 0, f"{y - 38 + self.window_offsets[1]:03}<{self.cognalities.get_current_name():5}>", curses.A_REVERSE | curses.A_BOLD if self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"] else curses.A_REVERSE)
+                self.stdscr.addstr(y, 0, f"{y - 38 + self.window_offsets[1]:03}<{self.cognalities.get_current_name():5}>", highlight)
                 if self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[1]["col_num"]:
@@ -209,8 +214,9 @@ class AIQuickKeyEditor:
                 else:
                     self.stdscr.addstr(line)
             except curses.error:
-                pass  # Prevent crash due to writing outside of the window size
+                pass
         self.stdscr.refresh()
+
     def adjust_window_offset(self):
         for i in range(2):
             while self.windows[i]["line_num"] < self.window_offsets[i]:
@@ -374,15 +380,33 @@ class AIQuickKeyEditor:
             self.status = "IO er"
         except ValueError as err:
             self.status = "empty"
-    def handle_ctrl_y(self):
+
+    def handle_ctrl_t(self):
         current_window = self.windows[self.context_window]
-        if current_window["text"]:
-            if self.context_window == 1 and current_window["text"][0].isdigit():
-                num_lines = int(current_window["text"][0])
-                start_line = current_window["line_num"]
-                self.clipboard = current_window["text"][start_line:start_line + num_lines]
-            else:
-                self.clipboard = [current_window["text"][current_window["line_num"]]]
+        current_line = current_window["line_num"]
+        if not self.yank_mode_active:
+            self.yanked_lines.clear()
+            self.yank_mode_active = True
+        self.yanked_lines.add(current_line)
+        self.mode = 'yank'
+        self.display()
+
+    def handle_ctrl_k(self):
+        if self.yank_mode_active:
+            current_window = self.windows[self.context_window]
+            current_line = current_window["line_num"]
+            self.yanked_lines.add(current_line)
+            self.handle_down_arrow()
+            self.mode = 'yank'
+
+    def handle_ctrl_y(self):
+        if self.yank_mode_active and self.yanked_lines:
+            current_window = self.windows[self.context_window]
+            self.clipboard = [current_window["text"][line] for line in sorted(self.yanked_lines)]
+            self.yanked_lines.clear()
+            self.yank_mode_active = False
+            self.mode = 'edit'
+
     def handle_ctrl_p(self):
         if self.clipboard:
             current_window = self.windows[self.context_window]
@@ -433,6 +457,7 @@ class AIQuickKeyEditor:
         if self.search_results:
             self.current_search_result = (self.current_search_result - 1) % len(self.search_results)
             self.highlight_search_result()
+
     def run(self):
         while True:
             self.display()
@@ -451,8 +476,8 @@ class AIQuickKeyEditor:
                 self.handle_return()
             elif ch in (curses.KEY_BACKSPACE, 127):
                 self.handle_backspace(ch)
-            elif ch == 11: # ctrl-k
-                self.insert_char(92) #backslash
+            elif ch == 11:  # ctrl-k
+                self.handle_ctrl_k()
             elif ch == 23:
                 self.write_file()
             elif ch == 18:
@@ -471,10 +496,10 @@ class AIQuickKeyEditor:
                 self.prev_search_result()
             elif ch == 4:
                 self.delete_current_line()
+            elif ch == 20:  # Ctrl-T
+                self.handle_ctrl_t()
             elif ch == 25:  # Ctrl-Y
                 self.handle_ctrl_y()
-            elif ch == 16:  # Ctrl-P
-                self.handle_ctrl_p()
             else:
                 if self.windows[self.context_window]["line_num"] >= len(self.windows[self.context_window]["text"]):
                     self.windows[self.context_window]["text"].append('')
