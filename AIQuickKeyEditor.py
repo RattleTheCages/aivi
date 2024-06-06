@@ -1,4 +1,4 @@
-#AIQuickKeyEditor  -- the editor that wrote itself.
+#   AIQuickKeyEditor    -- The editor that wrote itself.
 #AIQuickKeyEditor is the prototype editor for the Aivi editor.
 #This editor is a fully functioning editor that offers AI assistance.
 #The top window is where you enter text and edit it; the bottom window is the AI command window, where you can enter requests for AI assistance.
@@ -31,13 +31,17 @@ class CogQuery:
     def update_request_counter(cls):
         cls.request_counter += 1
         return cls.request_counter
+    @classmethod
+    def reset_request_counter(cls):
+        cls.request_counter = 0
 
 class Cognalities:
     def __init__(self):
         self.cognalities = {
-            'Spelling and Grammar': {
+            'Spelling': {
                 'attributes': [
-                    'Your task is to spell and grammar check the following sentences.',
+                    'Your only task correct mispelled words.',
+                    'Answer strictly only using the correctly spelled words, do not change punctuation or sentence structure.'
                     'Take each sentence and output a corresponding corrected sentence.',
                     'The user wants the answer strictly formatted as the question.'
                 ],
@@ -47,24 +51,21 @@ class Cognalities:
             'Python Coder': {
                 'attributes': [
                     'Your task is to code in python.',
-                    'You are the best programmer who will think of every task to complete.',
+                    'You are one of the best programmers who will think of every task to complete.',
                     'You are very competent and good at writing code.',
-                    'Truncate unmodified functions or classes: Include only the functions or classes that have been changed. Do not include entire files or unmodified parts.',
-                    'Include sufficient context: Ensure that the snippets have enough context for understanding the changes.',
-                    'Provide modifications explicitly: Clearly mark what has been added, updated, or removed in the code.'
+                    'Besure to write the entire function when there are any modification to that function.'
+                    'When the code is longer than 222 lines, only write the modified functions.'
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 4096
             },
-            'Go Coder': {
+            'Spelling and Grammar': {
                 'attributes': [
-                    'Your task is to code in the go programming language.',
-                    'Truncate unmodified functions or classes: Include only the functions or classes that have been changed.',
-                    'Include sufficient context: Ensure that the snippets have enough context for understanding the changes.',
-                    'Provide modifications explicitly: Clearly mark what has been added, updated, or removed in the code.'
+                    'Your task is to spell and grammar check the given sentences.',
+                    'If needed, rewrite the sentences at a higher education level.'
                 ],
-                'model': 'gpt-4o',
-                'max_tokens': 4096
+                'model': 'gpt-4',
+                'max_tokens': 698
             },
             'Freestyle': {
                 'attributes': [],
@@ -76,7 +77,7 @@ class Cognalities:
                     "This is the children's game of 'telephone', play nicely."
                 ],
                 'model': 'gpt-4',
-                'max_tokens': 898
+                'max_tokens': 698
             }
         }
         self.names = list(self.cognalities.keys())
@@ -159,7 +160,6 @@ class AIQuickKeyEditor:
             self.read_file()
         else:
             self.show_splash_screen()
-
     def handle_return(self):
         current_window = self.windows[self.context_window]
         line = current_window["text"][current_window["line_num"]]
@@ -180,35 +180,34 @@ class AIQuickKeyEditor:
         self.stdscr.clear()
         for y in range(min(38, len(top_window) - self.window_offsets[0])):
             line = top_window[y + self.window_offsets[0]]
-            highlight = curses.A_REVERSE | curses.A_BOLD if self.context_window == 0 and y + self.window_offsets[0] in self.yanked_lines else curses.A_REVERSE
+            highlight = curses.A_UNDERLINE if self.context_window == 0 and y + self.window_offsets[0] in self.yanked_lines else curses.A_NORMAL
             try:
-                self.stdscr.addstr(y, 0, f"{y + self.window_offsets[0]:03}<{modeOrStatus:5}>", highlight)
+                self.stdscr.addstr(y, 0, f"{y + self.window_offsets[0]:03}<{modeOrStatus:5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]) else 0))
                 if self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[0]["col_num"]:
-                            self.stdscr.addch(ch, curses.A_REVERSE)
+                            self.stdscr.addch(ch, curses.A_REVERSE | curses.A_NORMAL)
                         else:
-                            self.stdscr.addch(ch)
+                            self.stdscr.addch(ch, curses.A_BOLD)  # add A_BOLD to the whole current line
                     if self.context_window == 0:
                         self.stdscr.move(y, self.windows[0]["col_num"] + len(f"{y + self.window_offsets[0]:03}<{modeOrStatus:5}>"))
                 else:
                     self.stdscr.addstr(line)
             except curses.error:
                 pass
-
         for y in range(38, 48):
             if y - 38 >= len(bottom_window) - self.window_offsets[1]:
                 break
-            highlight = curses.A_REVERSE | curses.A_BOLD if self.context_window == 1 and y - 38 + self.window_offsets[1] in self.yanked_lines else curses.A_REVERSE
+            highlight = curses.A_UNDERLINE if self.context_window == 1 and y - 38 + self.window_offsets[1] in self.yanked_lines else curses.A_NORMAL
             line = bottom_window[y - 38 + self.window_offsets[1]]
             try:
-                self.stdscr.addstr(y, 0, f"{y - 38 + self.window_offsets[1]:03}<{self.cognalities.get_current_name():5}>", highlight)
+                self.stdscr.addstr(y, 0, f"{y - 38 + self.window_offsets[1]:03}<{self.cognalities.get_current_name():5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"]) else 0))
                 if self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[1]["col_num"]:
-                            self.stdscr.addch(ch, curses.A_REVERSE)
+                            self.stdscr.addch(ch, curses.A_REVERSE | curses.A_NORMAL)
                         else:
-                            self.stdscr.addch(ch)
+                            self.stdscr.addch(ch, curses.A_BOLD)  # add A_BOLD to the whole current line
                     if self.context_window == 1:
                         self.stdscr.move(y, self.windows[1]["col_num"] + len(f"{y - 38 + self.window_offsets[1]:03}<{self.personalchoice:5}>"))
                 else:
@@ -216,7 +215,6 @@ class AIQuickKeyEditor:
             except curses.error:
                 pass
         self.stdscr.refresh()
-
     def adjust_window_offset(self):
         for i in range(2):
             while self.windows[i]["line_num"] < self.window_offsets[i]:
@@ -246,7 +244,6 @@ class AIQuickKeyEditor:
                 self.mode = 'undo'
             else:
                 self.mode = 'reply'
-            # Store the text of the current window separately
             if self.context_window not in self.oldtext:
                 self.oldtext[self.context_window] = []
             self.oldertext = self.windows[self.context_window]["text"]
@@ -331,25 +328,27 @@ class AIQuickKeyEditor:
         )
         self.context.add_cogtext("assistant", completion.choices[0].message.content)
         self.context.save_cogtext(ai_context_filename)
-
         if self.context_window not in self.oldtext:
             self.oldtext[self.context_window] = []
         self.oldtext[self.context_window] = self.windows[self.context_window]["text"]
-        self.windows[self.context_window]["text"] = completion.choices[0].message.content.split('\n')
+        self.windows[self.context_window]["text"].extend(completion.choices[0].message.content.split('\n'))
+        #self.windows[self.context_window]["text"] = completion.choices[0].message.content.split('\n')
         self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
         self.windows[self.context_window]["col_num"] = len(self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]])
-        if self.context_window == 1:
-            self.write_file()
+        self.write_file()
         self.mode = 'reply'
         self.adjust_window_offset()
     def write_file(self):
         try:
-            file_base_name = os.path.splitext(self.filename)[0]
-            request_id = CogQuery.get_unique_request_counter(file_base_name)
-            with open(f'{file_base_name}_{request_id}.txt', 'w') as f:
+            file_base_name, file_suffix = os.path.splitext(self.filename)
+            request_id = CogQuery.update_request_counter()
+            backup_filename = f'{file_base_name}.{request_id}{file_suffix}'
+            ctx_filename = f'{file_base_name}.{request_id}.ctx'
+            os.rename(self.filename, backup_filename)
+            with open(self.filename, 'w') as f:
                 for line in self.windows[0]["text"]:
                     f.write(line + '\n')
-            with open(f'{file_base_name}_{request_id}.ctx', 'w') as f:
+            with open(ctx_filename, 'w') as f:
                 for line in self.windows[1]["text"]:
                     f.write(line + '\n')
                 f.write(self.cognalities.get_current_name() + '\n')
@@ -369,6 +368,7 @@ class AIQuickKeyEditor:
             self.windows[1]["line_num"] = 0
             self.windows[1]["col_num"] = 0
             self.status = "read "
+            CogQuery.reset_request_counter()
             self.adjust_window_offset()
         except FileNotFoundError:
             self.status = "not f"
@@ -380,7 +380,6 @@ class AIQuickKeyEditor:
             self.status = "IO er"
         except ValueError as err:
             self.status = "empty"
-
     def handle_ctrl_t(self):
         current_window = self.windows[self.context_window]
         current_line = current_window["line_num"]
@@ -390,7 +389,6 @@ class AIQuickKeyEditor:
         self.yanked_lines.add(current_line)
         self.mode = 'yank'
         self.display()
-
     def handle_ctrl_k(self):
         if self.yank_mode_active:
             current_window = self.windows[self.context_window]
@@ -398,7 +396,8 @@ class AIQuickKeyEditor:
             self.yanked_lines.add(current_line)
             self.handle_down_arrow()
             self.mode = 'yank'
-
+        else:
+            self.insert_char(ord('\\'))
     def handle_ctrl_y(self):
         if self.yank_mode_active and self.yanked_lines:
             current_window = self.windows[self.context_window]
@@ -406,7 +405,6 @@ class AIQuickKeyEditor:
             self.yanked_lines.clear()
             self.yank_mode_active = False
             self.mode = 'edit'
-
     def handle_ctrl_p(self):
         if self.clipboard:
             current_window = self.windows[self.context_window]
