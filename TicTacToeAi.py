@@ -1,6 +1,7 @@
 '''
-This implementation allows a single player to play against a basic AI that randomly selects its moves. You can further improve the AI by implementing more advanced strategies if desired.
-Absolutely! Here, I will improve the Tic-Tac-Toe game by adding a more advanced strategy for the computer player. This strategy will include an algorithm to determine the best move based on the current state of the board. To keep it simple, we will use the Minimax algorithm.
+ai>>Write a game of tic-tac-toe.
+ai>>Change it so its one player against the computer.
+ai>>Add strategy to the computer's move, not just random.
 
 Here's the modified code to implement a one-player game against a strategic computer:
 
