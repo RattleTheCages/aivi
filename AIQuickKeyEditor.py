@@ -47,7 +47,8 @@ class Cognalities:
                     'The user wants the answer strictly formatted as the question.'
                 ],
                 'model': 'gpt-3.5-turbo',
-                'max_tokens': 298
+                'max_tokens': 298,
+                'flags': {'concatenate': False, 'replace': True}
             },
             'Python Coder': {
                 'attributes': [
@@ -58,7 +59,8 @@ class Cognalities:
                     'When the code is longer than 222 lines, only write the modified functions.'
                 ],
                 'model': 'gpt-4o',
-                'max_tokens': 4096
+                'max_tokens': 4096,
+                'flags': {'concatenate': True, 'replace': False}
             },
             'Spelling and Grammar': {
                 'attributes': [
@@ -66,22 +68,31 @@ class Cognalities:
                     'If needed, rewrite the sentences at a higher education level.'
                 ],
                 'model': 'gpt-4',
-                'max_tokens': 698
+                'max_tokens': 698,
+                'flags': {'concatenate': False, 'replace': True}
             },
             'Freestyle': {
                 'attributes': [],
                 'model': 'gpt-4o',
-                'max_tokens': 4096
+                'max_tokens': 4096,
+                'flags': {'concatenate': True, 'replace': False}
             },
             'Telephone': {
                 'attributes': [
                     "This is the children's game of 'telephone', play nicely."
                 ],
                 'model': 'gpt-4',
-                'max_tokens': 698
+                'max_tokens': 698,
+                'flags': {'concatenate': True, 'replace': False}
             }
         }
         self.names = list(self.cognalities.keys())
+        self.current_index = 0
+    def get_current_name(self):
+        return self.names[self.current_index]
+    def get_attributes(self):
+        return self.cognalities[self.get_current_name()]['attributes']
+    def next_cognality(self):
         self.current_index = 0
     def get_current_name(self):
         return self.names[self.current_index]
@@ -96,6 +107,8 @@ class Cognalities:
         return self.cognalities[self.get_current_name()]['model']
     def get_maxtokens(self):
         return self.cognalities[self.get_current_name()]['max_tokens']
+    def get_flags(self):
+        return self.cognalities[self.get_current_name()]['flags']
 
 class Cogtext:
     def __init__(self, cognalities):
@@ -140,9 +153,8 @@ class AIQuickKeyEditor:
     def __init__(self, stdscr):
         signal.signal(signal.SIGINT, self.handle_sigint)
         self.stdscr = stdscr
-        self.mode = "edit"
-        self.status = ""
-        self.oldtext = {}
+        self.mode = 'line'
+        self.status = 'hello'
         self.clipboard = []
         self.yanked_lines = set()
         self.yank_mode_active = False
@@ -184,7 +196,7 @@ class AIQuickKeyEditor:
             line = top_window[y + self.window_offsets[0]]
             highlight = curses.A_UNDERLINE if self.context_window == 0 and y + self.window_offsets[0] in self.yanked_lines else curses.A_NORMAL
             try:
-                self.stdscr.addstr(y, 0, f"{y + self.window_offsets[0]:03}<{modeOrStatus:5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]) else 0))
+                self.stdscr.addstr(y, 0, f"{((y + self.window_offsets[0]+1)%1000):03}<{modeOrStatus:5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]) else 0))
                 if self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[0]["col_num"]:
@@ -203,7 +215,7 @@ class AIQuickKeyEditor:
             highlight = curses.A_UNDERLINE if self.context_window == 1 and y - 38 + self.window_offsets[1] in self.yanked_lines else curses.A_NORMAL
             line = bottom_window[y - 38 + self.window_offsets[1]]
             try:
-                self.stdscr.addstr(y, 0, f"{y - 38 + self.window_offsets[1]:03}<{self.cognalities.get_current_name():5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"]) else 0))
+                self.stdscr.addstr(y, 0, f"{((y - 38 + self.window_offsets[1]+1)%1000):03}<{self.cognalities.get_current_name():5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"]) else 0))
                 if self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[1]["col_num"]:
@@ -241,16 +253,28 @@ class AIQuickKeyEditor:
             current_window["col_num"] += 1
         self.adjust_window_offset()
     def handle_backspace(self, ch):
-        if self.mode == 'reply':
-            if self.context_window not in self.oldtext:
-                self.oldtext[self.context_window] = []
-            self.oldertext = self.windows[self.context_window]["text"]
-            self.windows[self.context_window]["text"] = self.oldtext[self.context_window]
-            self.oldtext[self.context_window] = self.oldertext
-        if self.mode == 'line':
-            self.insert_char(ch)
         if self.mode == 'edit':
             self.insert_char(ch)
+        else:
+            current_window = self.windows[self.context_window]
+            if self.clipboard:
+                undo_content = list(current_window["text"])
+                current_window["text"].clear()
+                current_window["text"].extend(self.clipboard)
+                self.clipboard = undo_content
+                if self.status == 'undo':
+                    self.status = 'redo'
+                else:
+                    self.status = 'undo'
+                if current_window["line_num"] >= len(current_window["text"]):
+                    current_window["line_num"] = len(current_window["text"]) - 1
+                if current_window["line_num"] < 0:
+                    current_window["line_num"] = 0
+                if current_window["col_num"] > len(current_window["text"][current_window["line_num"]]):
+                    current_window["col_num"] = len(current_window["text"][current_window["line_num"]])
+                if current_window["col_num"] < 0:
+                    current_window["col_num"] = 0
+                self.adjust_window_offset()
     def delete_current_line(self):
         current_window = self.windows[self.context_window]
         if len(current_window["text"]) > 1:
@@ -314,6 +338,7 @@ class AIQuickKeyEditor:
             self.context.add_cogtext("user", userlines)
         self.context.save_cogtext(before_context_filename)
         self.write_file()
+        self.clipboard = [line for line in self.windows[self.context_window]["text"]]
         # I am a fluffy unicorn, with light green spots.
         self.status = 'ai *'
         self.display()
@@ -324,15 +349,23 @@ class AIQuickKeyEditor:
         )
         self.context.add_cogtext("assistant", completion.choices[0].message.content)
         self.context.save_cogtext(ai_context_filename)
-        if self.context_window not in self.oldtext:
-            self.oldtext[self.context_window] = []
-        self.oldtext[self.context_window] = self.windows[self.context_window]["text"]
-        self.windows[self.context_window]["text"].extend(completion.choices[0].message.content.split('\n'))
-        #self.windows[self.context_window]["text"] = completion.choices[0].message.content.split('\n')
+        flags = self.cognalities.get_flags()
+        response_text = completion.choices[0].message.content.split('\n')
+        if flags['replace']:
+            self.windows[self.context_window]["text"] = response_text
+        elif flags['concatenate']:
+            self.windows[self.context_window]["text"].extend(response_text)
         self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
         self.windows[self.context_window]["col_num"] = len(self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]])
         self.write_file()
         self.mode = 'reply'
+        self.stdscr.nodelay(True)
+        try:
+            ch = self.stdscr.getch()
+            while ch != -1:
+                ch = self.stdscr.getch()
+        finally:
+            self.stdscr.nodelay(False)
         self.adjust_window_offset()
     def write_file(self):
         try:
@@ -374,24 +407,31 @@ class AIQuickKeyEditor:
             self.status = "IO er"
         except ValueError as err:
             self.status = "empty"
-    def handle_ctrl_t(self):
-        current_window = self.windows[self.context_window]
-        current_line = current_window["line_num"]
-        if not self.yank_mode_active:
-            self.yanked_lines.clear()
-            self.yank_mode_active = True
-        self.yanked_lines.add(current_line)
-        self.mode = 'line'
-        self.status = 'yank'
-        self.display()
-    def handle_ctrl_k(self):
+    def handle_ctrl_x(self):
         if self.yank_mode_active:
             current_window = self.windows[self.context_window]
             current_line = current_window["line_num"]
             self.yanked_lines.add(current_line)
-            self.handle_down_arrow()
             self.mode = 'line'
             self.status = 'mark'
+            self.handle_down_arrow()
+        else:
+            current_window = self.windows[self.context_window]
+            current_line = current_window["line_num"]
+            if not self.yank_mode_active:
+                self.yanked_lines.clear()
+                self.yank_mode_active = True
+            self.yanked_lines.add(current_line)
+            self.mode = 'line'
+            self.status = 'xtrac'
+    def handle_ctrl_k(self):
+        if self.context_window == 0 and self.mode == 'line':
+            self.windows[0]["line_num"] += 38
+            if self.windows[0]["line_num"] >= len(self.windows[0]["text"]):
+                self.windows[0]["line_num"] = len(self.windows[0]["text"]) - 1
+            if self.windows[0]["col_num"] > len(self.windows[0]["text"][self.windows[0]["line_num"]]):
+               self.windows[0]["col_num"] = len(self.windows[0]["text"][self.windows[0]["line_num"]])
+            self.adjust_window_offset()
         else:
             self.insert_char(ord('\\'))
     def handle_ctrl_y(self):
@@ -405,11 +445,14 @@ class AIQuickKeyEditor:
     def handle_ctrl_p(self):
         if self.clipboard:
             current_window = self.windows[self.context_window]
+            buffer = list(current_window["text"])
             current_line = current_window["text"][current_window["line_num"]]
             for line in self.clipboard:
                 current_window["text"].insert(current_window["line_num"], line)
                 current_window["line_num"] += 1
             current_window["col_num"] = len(current_line)
+            self.clipboard = []
+            self.clipboard = buffer
             self.mode = 'line'
             self.status = 'paste'
             self.adjust_window_offset()
@@ -436,7 +479,8 @@ class AIQuickKeyEditor:
         if self.search_results:
             self.current_search_result = 0
             self.highlight_search_result()
-            self.status = f"found {len(self.search_results)}"
+            self.status = f"fnd {len(self.search_results):02}"
+            self.context_window = 0
         else:
             self.status = 'not f'
     def highlight_search_result(self):
@@ -455,16 +499,32 @@ class AIQuickKeyEditor:
             self.current_search_result = (self.current_search_result - 1) % len(self.search_results)
             self.highlight_search_result()
     def handle_sigint(self, sig, frame):
-        #self.stdscr.clear()
-        self.stdscr.addstr(0, 0, "Ctrl-C, are you sure you want to exit? (y/n):")
+        self.stdscr.addstr(0, 0, "Ctrl-C, are you sure you want to exit? (Y):")
         self.stdscr.refresh()
         while True:
             ch = self.stdscr.getch()
-            if ch == ord('y') or ch == ord('Y'):
+            if ch == ord('Y'):
                 raise SystemExit
-            elif ch == ord('n') or ch == ord('N'):
+            else:
                 self.display()
-                return
+                break
+    def handle_ctrl_a(self):
+        self.context_window = 1 - self.context_window
+        if self.context_window == 1:
+            self.mode = 'commd'
+        else:
+            self.mode = 'edit'
+    def handle_ctrl_t(self):
+        self.status = "Ctrlt"
+        self.display()
+    def handle_ctrl_m(self):
+        self.mode = "not captured"
+    def handle_ctrl_h(self):
+        self.status = "CtrlH"
+        self.display()
+    def handle_ctrl_g(self):
+        self.status = "CtrlG"
+        self.display()
     def run(self):
         while True:
             self.display()
@@ -490,7 +550,7 @@ class AIQuickKeyEditor:
             elif ch == 18:
                 self.read_file()
             elif ch == 1:
-                self.context_window = 1 - self.context_window
+                self.handle_ctrl_a()
             elif ch == 16:
                 self.handle_ctrl_p()
             elif ch == 6:  # Ctrl-F
@@ -503,35 +563,50 @@ class AIQuickKeyEditor:
                 self.prev_search_result()
             elif ch == 4:
                 self.delete_current_line()
-            elif ch == 20:  # Ctrl-T
+            elif ch == 20:
                 self.handle_ctrl_t()
-            elif ch == 25:  # Ctrl-Y
+            elif ch == 25:
                 self.handle_ctrl_y()
+            elif ch == 24:  # Ctrl-X
+                self.handle_ctrl_x()
+            elif ch == 8:   # Ctrl-H
+                self.handle_ctrl_h()
+            elif ch == 7:  # Ctrl-G
+                self.handle_ctrl_g()
             else:
                 if self.windows[self.context_window]["line_num"] >= len(self.windows[self.context_window]["text"]):
                     self.windows[self.context_window]["text"].append('')
                 self.insert_char(ch)
     def show_splash_screen(self):
         self.stdscr.clear()
-        self.mode = 'splsh'
+        self.status = 'splsh'
         splash_text = [
+            "",
             "Welcome to the AIQuickKeyEditor!",
+            "    qk for short ;)",
             "",
             "Control Characters:",
-            "Ctrl-A: Switch between editor window and AI command",
-            "Ctrl-W: Write the editor window to a file",
-            "Ctrl-R: Read the file to edit",
-            "Ctrl-O: Switch AI Personality Eg Spell and Grammer check, Python Coder",
-            "Backslash (\\): Send the editor window to the AI and receive a reply.",
-            "Backspace (<-): Switch between the AI reply and the original, for quick comparison.",
+            "Ctrl-A: Switch between editor window and AI command.",
+            "Ctrl-V: Switch AI Personality, E.g. Spelling and Grammar, Python Coder.",
+            "Ctrl-W: Write the editor window to a file.",
+            "Ctrl-R: Read the file to edit.",
+            "Backslash key (\\): Quick Query AI.",
+            "Backspace key (<-): Switch between the AI reply and the original, for quick comparison.",
             "Ctrl-D: Delete a line.",
+            "Ctrl-X: Extract and mark lines (repeat Ctrl-X).",
+            "Ctrl-Y: Yank (copy) the marked lines.",
+            "Ctrl-P: Paste the yanked lines.",
             "Ctrl-K: If you need a backslash.",
-            "Use the arrow keys to navigate and start typing to edit.",
+            "Use the arrow keys to navigate.",
+            "",
             "Try:",
-            "Enter the AI request in the command window,",
-            "Use \\ to fix spelling inline in the command window,",
-            "Then ctrl-A to switch back to the editor window,",
-            "Then \\ to send your request to AI.",
+            "Crtl-A to switch to the AI command window,",
+            "Type: 'Print the Fibonacci series.'",
+            "Crtl-V to change voice to Spelling.",
+            "Depress the \\ key to fix spelling inline, in the AI command window,",
+            "Be sure to Ctrl-A back to the editor window,",
+            "Crtl-V to change to Python Coder.",
+            "Press the \\ key to send your request to AI.",
             "",
             "Enjoy your AI-Assisted text and code writing experience!"
         ]
@@ -548,12 +623,10 @@ class AIQuickKeyEditor:
         self.stdscr.refresh()
         self.stdscr.getch()
         self.filename = 'quickAi.txt'
-        self.read_file()
 
 def main(stdscr):
     editor = AIQuickKeyEditor(stdscr)
     editor.run()
 if __name__ == "__main__":
     curses.wrapper(main)
-
 
