@@ -42,7 +42,7 @@ class Cognalities:
             'Spelling': {
                 'attributes': [
                     'Your only task correct mispelled words.',
-                    'Answer strictly only using the correctly spelled words, do not change punctuation or sentence structure.'
+                    'Answer strictly only using the correctly spelled words, do not change punctuation or sentence structure.',
                     'Take each sentence and output a corresponding corrected sentence.',
                     'The user wants the answer strictly formatted as the question.'
                 ],
@@ -55,8 +55,9 @@ class Cognalities:
                     'Your task is to code in python.',
                     'You are one of the best programmers who will think of every task to complete.',
                     'You are very competent and good at writing code.',
-                    'Besure to write the entire function when there are any modification to that function.'
-                    'When the code is longer than 222 lines, only write the modified functions.'
+                    'Besure to write the entire function when there are any modification to that function.',
+                    'When the code is longer than 222 lines, only write the modified functions; ',
+                    'and indent the modified functions so they can be yanked and pasted into the code.'
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
@@ -64,8 +65,8 @@ class Cognalities:
             },
             'Spelling and Grammar': {
                 'attributes': [
-                    'Your task is to spell and grammar check the given sentences.',
-                    'If needed, rewrite the sentences at a higher education level.'
+                    'Your task is to spell and grammar check the given sentences.'
+                    #'If needed, rewrite the sentences at a higher education level.'
                 ],
                 'model': 'gpt-4',
                 'max_tokens': 698,
@@ -169,8 +170,8 @@ class AIQuickKeyEditor:
         self.cognalities = Cognalities()
         self.personalchoice = self.cognalities.get_current_name()
         self.context = Cogtext(self.cognalities)
-        self.filename = args.file if args.file else 'quickai.txt'
-        if args.file:
+        self.filename = args.file if args.file else 'quickAi.txt'
+        if os.path.exists(self.filename):
             self.read_file()
         else:
             self.show_splash_screen()
@@ -306,10 +307,12 @@ class AIQuickKeyEditor:
         line = current_window["text"][current_window["line_num"]]
         if current_window["col_num"] < len(line):
             current_window["col_num"] += 1
+        self.status = 'edit'
     def handle_left_arrow(self):
         current_window = self.windows[self.context_window]
         if current_window["col_num"] > 0:
             current_window["col_num"] -= 1
+        self.status = 'edit'
     def handle_backslash(self):
         file_base_name = os.path.splitext(self.filename)[0]
         request_id = CogQuery.get_unique_request_counter(file_base_name)
@@ -370,14 +373,27 @@ class AIQuickKeyEditor:
     def write_file(self):
         try:
             file_base_name, file_suffix = os.path.splitext(self.filename)
-            request_id = CogQuery.update_request_counter()
-            backup_filename = f'{file_base_name}.{request_id}{file_suffix}'
-            ctx_filename = f'{file_base_name}.{request_id}.ctx'
-            os.rename(self.filename, backup_filename)
-            with open(self.filename, 'w') as f:
+            # Find unique backup filename for the main file
+            while True:
+                request_id = CogQuery.update_request_counter()
+                backup_filename = f'{file_base_name}.{request_id}{file_suffix}'
+                if not os.path.exists(backup_filename):
+                    break
+            if os.path.exists(self.filename):
+                os.rename(self.filename, backup_filename)
+            with open(self.filename, 'w+') as f:
                 for line in self.windows[0]["text"]:
                     f.write(line + '\n')
-            with open(ctx_filename, 'w') as f:
+            ctx_filename = f'{file_base_name}.ctx'
+            # Find unique backup filename for the .ctx file
+            while True:
+                ctx_rename = f'{file_base_name}.{request_id}.ctx'
+                if not os.path.exists(ctx_rename):
+                    break
+                request_id = CogQuery.update_request_counter()  # update request counter until unique
+            if os.path.exists(ctx_filename):
+                os.rename(ctx_filename, ctx_rename)
+            with open(ctx_filename, 'w+') as f:
                 for line in self.windows[1]["text"]:
                     f.write(line + '\n')
                 f.write(self.cognalities.get_current_name() + '\n')
@@ -397,8 +413,6 @@ class AIQuickKeyEditor:
             self.status = "read "
             CogQuery.reset_request_counter()
             self.adjust_window_offset()
-        except FileNotFoundError:
-            self.status = "not f"
         except PermissionError:
             self.status = "denid"
         except IsADirectoryError:
@@ -499,15 +513,15 @@ class AIQuickKeyEditor:
             self.current_search_result = (self.current_search_result - 1) % len(self.search_results)
             self.highlight_search_result()
     def handle_sigint(self, sig, frame):
-        self.stdscr.addstr(0, 0, "Ctrl-C, are you sure you want to exit? (Y):")
+        self.stdscr.addstr(0, 0, "Ctrl-C, are you sure you want to exit? (Y/n):", curses.A_REVERSE | curses.A_BOLD)
         self.stdscr.refresh()
         while True:
             ch = self.stdscr.getch()
             if ch == ord('Y'):
                 raise SystemExit
-            else:
+            elif ch == ord('n') or ch == ord('N'):
                 self.display()
-                break
+                return
     def handle_ctrl_a(self):
         self.context_window = 1 - self.context_window
         if self.context_window == 1:
@@ -622,11 +636,11 @@ class AIQuickKeyEditor:
         self.mode = ''
         self.stdscr.refresh()
         self.stdscr.getch()
-        self.filename = 'quickAi.txt'
 
 def main(stdscr):
     editor = AIQuickKeyEditor(stdscr)
     editor.run()
 if __name__ == "__main__":
     curses.wrapper(main)
+
 
