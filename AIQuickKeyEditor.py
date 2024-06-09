@@ -18,16 +18,13 @@ parser.add_argument('file', nargs='?', default=None)
 args = parser.parse_args()
 client = OpenAI(api_key=os.environ.get("CUSTOM_ENV_NAME"))
 
-class CogQuery:
+class CogEngine:
+    request_counter = 0
     @classmethod
     def get_unique_request_counter(cls, file_base_name):
         while os.path.exists(f'{file_base_name}_{cls.request_counter}.txt'):
             cls.update_request_counter()
         return cls.request_counter
-    request_counter = 0
-    def __init__(self, role, content):
-        self.role = role
-        self.content = content
     @classmethod
     def update_request_counter(cls):
         cls.request_counter += 1
@@ -35,6 +32,43 @@ class CogQuery:
     @classmethod
     def reset_request_counter(cls):
         cls.request_counter = 0
+    def __init__(self, cognalities):
+        self.cognalities = cognalities
+        self.cogessages = []
+        self.usermsg = []
+    def reset(self):
+        self.cogessages = []
+        self.usermsg = []
+    def add_cogtext(self, role, content):
+        self.cogessages.append({"role": role, "content": content})
+    def add_cogatt(self, name, role, content):
+        if name in self.cognalities.cognalities:
+            self.cogessages.append({"role": role, "content": content})
+    def get_cogtext(self):
+        context = [{"role": message["role"], "content": message["content"]} for message in self.cogessages]
+        context += [{"role": "user", "content": umsg} for umsg in self.usermsg]
+        return context
+    def get_cogtext_by_name(self, name):
+        attributes = self.cognalities.get_attributes_by_name(name)
+        context = [{"role": "system", "content": attribute} for attribute in attributes]
+        context += [{"role": "user", "content": umsg} for umsg in self.usermsg]
+        return context
+    def add_usermsg(self, msg):
+        self.usermsg.append(msg)
+    def save_cogtext(self, filename):
+        with open(filename, 'w') as f:
+            json.dump({
+                "model": self.cognalities.get_model(),
+                "max_tokens": self.cognalities.get_maxtokens(),
+                "messages": self.get_cogtext()
+            }, f)
+    def load_cogtext(self, filename):
+        if os.path.exists(filename):
+            with open(filename, 'r') as f:
+                data = json.load(f)
+                self.cognalities.model = data.get('model', '')
+                self.cognalities.max_tokens = data.get('max_tokens', 0)
+                self.cogessages = [{"role": item['role'], "content": item['content']} for item in data.get('messages', [])]
 
 class Cognalities:
     def __init__(self):
@@ -57,7 +91,7 @@ class Cognalities:
                     'You are very competent and good at writing code.',
                     'Besure to write the entire function when there are any modification to that function.',
                     'When the code is longer than 222 lines, only write the modified functions; ',
-                    'and indent the modified functions so they can be yanked and pasted into the code.'
+                    'and indent so the modified functions can be dropped into the appropriate positions'
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
@@ -111,45 +145,6 @@ class Cognalities:
     def get_flags(self):
         return self.cognalities[self.get_current_name()]['flags']
 
-class Cogtext:
-    def __init__(self, cognalities):
-        self.cognalities = cognalities
-        self.cogessages = []
-        self.usermsg = []
-    def reset(self):
-        self.cogessages = []
-        self.usermsg = []
-    def add_cogtext(self, role, content):
-        self.cogessages.append(CogQuery(role, content))
-    def add_cogatt(self, name, role, content):
-        if name in self.cognalities.cognalities:
-            self.cogessages.append(CogQuery(role, content))
-    def get_cogtext(self):
-        context = [{"role": message.role, "content": message.content} for message in self.cogessages]
-        context += [{"role": "user", "content": umsg} for umsg in self.usermsg]
-        return context
-    def get_cogtext_by_name(self, name):
-        attributes = self.cognalities.get_attributes_by_name(name)
-        context = [{"role": "system", "content": attribute} for attribute in attributes]
-        context += [{"role": "user", "content": umsg} for umsg in self.usermsg]
-        return context
-    def add_usermsg(self, msg):
-        self.usermsg.append(msg)
-    def save_cogtext(self, filename):
-        with open(filename, 'w') as f:
-            json.dump({
-                "model": self.cognalities.get_model(),
-                "max_tokens": self.cognalities.get_maxtokens(),
-                "messages": self.get_cogtext()
-            }, f)
-    def load_cogtext(self, filename):
-        if os.path.exists(filename):
-            with open(filename, 'r') as f:
-                data = json.load(f)
-                self.cognalities.model = data.get('model', '')
-                self.cognalities.max_tokens = data.get('max_tokens', 0)
-                self.cogessages = [CogQuery(item['role'], item['content']) for item in data.get('messages', [])]
-
 class AIQuickKeyEditor:
     def __init__(self, stdscr):
         signal.signal(signal.SIGINT, self.handle_sigint)
@@ -158,8 +153,9 @@ class AIQuickKeyEditor:
         self.status = 'hello'
         self.clipboard = []
         self.yanked_lines = set()
-        self.yank_mode_active = False
-        self.context_window = 0
+        self.del_lines = set()
+        self.yank_mode_active = 'off'
+        self.context_window = 1
         self.search_results = []
         self.current_search_result = -1
         self.windows = [
@@ -167,10 +163,41 @@ class AIQuickKeyEditor:
             {"line_num": 0, "col_num": 0, "text": [""]},
         ]
         self.window_offsets = [0, 0]
+        self.top_window_size = 38
+        self.bottom_window_size = 10
         self.cognalities = Cognalities()
         self.personalchoice = self.cognalities.get_current_name()
-        self.context = Cogtext(self.cognalities)
+        self.context = CogEngine(self.cognalities)
         self.filename = args.file if args.file else 'quickAi.txt'
+        self.keymap = {
+            curses.KEY_UP: self.handle_up_arrow,
+            curses.KEY_DOWN: self.handle_down_arrow,
+            curses.KEY_RIGHT: self.handle_right_arrow,
+            curses.KEY_LEFT: self.handle_left_arrow,
+            curses.KEY_DC: self.handle_del_key,
+            ord('\\'): self.handle_backslash,
+            ord('\n'): self.handle_return,
+            curses.KEY_BACKSPACE: lambda: self.handle_backspace(curses.KEY_BACKSPACE),
+            127: lambda: self.handle_backspace(127),
+            11: self.handle_ctrl_k,
+            23: self.write_file,
+            18: self.read_file,
+            1: self.handle_ctrl_a,
+            16: self.handle_ctrl_p,
+            6: self.search_text,
+            22: self.handle_ctrl_v,
+            #14: self.next_search_result,
+            2: self.prev_search_result,
+            4: self.delete_current_line,
+            20: self.handle_ctrl_t,
+            25: self.handle_ctrl_y,
+            24: self.handle_ctrl_x,
+            8: self.handle_ctrl_h,
+            7: self.handle_ctrl_g,
+            14: self.handle_ctrl_n,
+            #43: self.increase_top_window_size,
+            #45: self.decrease_top_window_size,
+        }
         if os.path.exists(self.filename):
             self.read_file()
         else:
@@ -193,7 +220,7 @@ class AIQuickKeyEditor:
         top_window = self.windows[0]["text"]
         bottom_window = self.windows[1]["text"]
         self.stdscr.clear()
-        for y in range(min(38, len(top_window) - self.window_offsets[0])):
+        for y in range(min(self.top_window_size, len(top_window) - self.window_offsets[0])):
             line = top_window[y + self.window_offsets[0]]
             highlight = curses.A_UNDERLINE if self.context_window == 0 and y + self.window_offsets[0] in self.yanked_lines else curses.A_NORMAL
             try:
@@ -203,28 +230,28 @@ class AIQuickKeyEditor:
                         if x == self.windows[0]["col_num"]:
                             self.stdscr.addch(ch, curses.A_REVERSE | curses.A_NORMAL)
                         else:
-                            self.stdscr.addch(ch, curses.A_BOLD)  # add A_BOLD to the whole current line
+                            self.stdscr.addch(ch, curses.A_BOLD)
                     if self.context_window == 0:
                         self.stdscr.move(y, self.windows[0]["col_num"] + len(f"{y + self.window_offsets[0]:03}<{modeOrStatus:5}>"))
                 else:
                     self.stdscr.addstr(line)
             except curses.error:
                 pass
-        for y in range(38, 48):
-            if y - 38 >= len(bottom_window) - self.window_offsets[1]:
+        for y in range(self.top_window_size, self.top_window_size + self.bottom_window_size):
+            if y - self.top_window_size >= len(bottom_window) - self.window_offsets[1]:
                 break
-            highlight = curses.A_UNDERLINE if self.context_window == 1 and y - 38 + self.window_offsets[1] in self.yanked_lines else curses.A_NORMAL
-            line = bottom_window[y - 38 + self.window_offsets[1]]
+            highlight = curses.A_UNDERLINE if self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] in self.yanked_lines else curses.A_NORMAL
+            line = bottom_window[y - self.top_window_size + self.window_offsets[1]]
             try:
-                self.stdscr.addstr(y, 0, f"{((y - 38 + self.window_offsets[1]+1)%1000):03}<{self.cognalities.get_current_name():5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"]) else 0))
-                if self.context_window == 1 and y - 38 + self.window_offsets[1] == self.windows[1]["line_num"]:
+                self.stdscr.addstr(y, 0, f"{((y - self.top_window_size + self.window_offsets[1]+1)%1000):03}<{self.cognalities.get_current_name():5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] == self.windows[1]["line_num"]) else 0))
+                if self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] == self.windows[1]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[1]["col_num"]:
                             self.stdscr.addch(ch, curses.A_REVERSE | curses.A_NORMAL)
                         else:
-                            self.stdscr.addch(ch, curses.A_BOLD)  # add A_BOLD to the whole current line
+                            self.stdscr.addch(ch, curses.A_BOLD)
                     if self.context_window == 1:
-                        self.stdscr.move(y, self.windows[1]["col_num"] + len(f"{y - 38 + self.window_offsets[1]:03}<{self.personalchoice:5}>"))
+                        self.stdscr.move(y, self.windows[1]["col_num"] + len(f"{y - self.top_window_size + self.window_offsets[1]:03}<{self.personalchoice:5}>"))
                 else:
                     self.stdscr.addstr(line)
             except curses.error:
@@ -234,8 +261,18 @@ class AIQuickKeyEditor:
         for i in range(2):
             while self.windows[i]["line_num"] < self.window_offsets[i]:
                 self.window_offsets[i] -= 1
-            while self.windows[i]["line_num"] >= self.window_offsets[i] + (38 if i == 0 else 8):
+            while self.windows[i]["line_num"] >= self.window_offsets[i] + (self.top_window_size if i == 0 else self.bottom_window_size):
                 self.window_offsets[i] += 1
+    def increase_top_window_size(self):
+        if self.top_window_size + self.bottom_window_size < curses.LINES:
+            self.top_window_size += 1
+            self.bottom_window_size -= 1
+            self.adjust_window_offset()
+    def decrease_top_window_size(self):
+        if self.bottom_window_size + self.top_window_size > 1:
+            self.top_window_size -= 1
+            self.bottom_window_size += 1
+            self.adjust_window_offset()
     def insert_char(self, ch):
         current_window = self.windows[self.context_window]
         line = current_window["text"][current_window["line_num"]]
@@ -276,18 +313,6 @@ class AIQuickKeyEditor:
                 if current_window["col_num"] < 0:
                     current_window["col_num"] = 0
                 self.adjust_window_offset()
-    def delete_current_line(self):
-        current_window = self.windows[self.context_window]
-        if len(current_window["text"]) > 1:
-            current_window["text"].pop(current_window["line_num"])
-            if current_window["line_num"] >= len(current_window["text"]):
-                current_window["line_num"] -= 1
-            current_window["col_num"] = 0
-        else:
-            current_window["text"] = [""]
-            current_window["line_num"] = 0
-            current_window["col_num"] = 0
-        self.adjust_window_offset()
     def handle_up_arrow(self):
         current_window = self.windows[self.context_window]
         if current_window["line_num"] > 0:
@@ -307,15 +332,15 @@ class AIQuickKeyEditor:
         line = current_window["text"][current_window["line_num"]]
         if current_window["col_num"] < len(line):
             current_window["col_num"] += 1
-        self.status = 'edit'
+        self.mode = 'edit'
     def handle_left_arrow(self):
         current_window = self.windows[self.context_window]
         if current_window["col_num"] > 0:
             current_window["col_num"] -= 1
-        self.status = 'edit'
+        self.mode = 'edit'
     def handle_backslash(self):
         file_base_name = os.path.splitext(self.filename)[0]
-        request_id = CogQuery.get_unique_request_counter(file_base_name)
+        request_id = CogEngine.get_unique_request_counter(file_base_name)
         before_context_filename = f'{file_base_name}_before_context_{request_id}.json'
         ai_context_filename = f'{file_base_name}_ai_context_{request_id}.json'
         self.context.reset()
@@ -358,6 +383,7 @@ class AIQuickKeyEditor:
             self.windows[self.context_window]["text"] = response_text
         elif flags['concatenate']:
             self.windows[self.context_window]["text"].extend(response_text)
+            self.windows[self.context_window]["text"].extend('\n')
         self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
         self.windows[self.context_window]["col_num"] = len(self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]])
         self.write_file()
@@ -373,9 +399,8 @@ class AIQuickKeyEditor:
     def write_file(self):
         try:
             file_base_name, file_suffix = os.path.splitext(self.filename)
-            # Find unique backup filename for the main file
             while True:
-                request_id = CogQuery.update_request_counter()
+                request_id = CogEngine.update_request_counter()
                 backup_filename = f'{file_base_name}.{request_id}{file_suffix}'
                 if not os.path.exists(backup_filename):
                     break
@@ -385,12 +410,11 @@ class AIQuickKeyEditor:
                 for line in self.windows[0]["text"]:
                     f.write(line + '\n')
             ctx_filename = f'{file_base_name}.ctx'
-            # Find unique backup filename for the .ctx file
             while True:
                 ctx_rename = f'{file_base_name}.{request_id}.ctx'
                 if not os.path.exists(ctx_rename):
                     break
-                request_id = CogQuery.update_request_counter()  # update request counter until unique
+                request_id = CogEngine.update_request_counter()
             if os.path.exists(ctx_filename):
                 os.rename(ctx_filename, ctx_rename)
             with open(ctx_filename, 'w+') as f:
@@ -411,7 +435,7 @@ class AIQuickKeyEditor:
             self.windows[1]["line_num"] = 0
             self.windows[1]["col_num"] = 0
             self.status = "read "
-            CogQuery.reset_request_counter()
+            CogEngine.reset_request_counter()
             self.adjust_window_offset()
         except PermissionError:
             self.status = "denid"
@@ -421,39 +445,46 @@ class AIQuickKeyEditor:
             self.status = "IO er"
         except ValueError as err:
             self.status = "empty"
+    def delete_current_line(self):
+        self.status = 'delln'
+        current_window = self.windows[self.context_window]
+        current_line = current_window["line_num"]
+        self.yank_mode_active = 'del'
+        if len(current_window["text"]) > 1:
+            line = current_window["text"].pop(current_line)
+            self.clipboard = [line]
+            if current_line >= len(current_window["text"]):
+                current_window["line_num"] -= 1
+            current_window["col_num"] = 0
+        else:
+            line = current_window["text"][0]
+            self.clipboard = [line]
+            current_window["text"] = [""]
+            current_window["line_num"] = 0
+            current_window["col_num"] = 0
+        self.adjust_window_offset()
     def handle_ctrl_x(self):
-        if self.yank_mode_active:
-            current_window = self.windows[self.context_window]
-            current_line = current_window["line_num"]
-            self.yanked_lines.add(current_line)
-            self.mode = 'line'
-            self.status = 'mark'
-            self.handle_down_arrow()
+        current_window = self.windows[self.context_window]
+        current_line = current_window["line_num"]
+        if current_line in self.yanked_lines:
+            self.yanked_lines.remove(current_line)
+            self.status = 'unmrk'
         else:
-            current_window = self.windows[self.context_window]
-            current_line = current_window["line_num"]
-            if not self.yank_mode_active:
+            if self.yank_mode_active == 'off' or self.yank_mode_active == 'del':
                 self.yanked_lines.clear()
-                self.yank_mode_active = True
-            self.yanked_lines.add(current_line)
-            self.mode = 'line'
-            self.status = 'xtrac'
-    def handle_ctrl_k(self):
-        if self.context_window == 0 and self.mode == 'line':
-            self.windows[0]["line_num"] += 38
-            if self.windows[0]["line_num"] >= len(self.windows[0]["text"]):
-                self.windows[0]["line_num"] = len(self.windows[0]["text"]) - 1
-            if self.windows[0]["col_num"] > len(self.windows[0]["text"][self.windows[0]["line_num"]]):
-               self.windows[0]["col_num"] = len(self.windows[0]["text"][self.windows[0]["line_num"]])
-            self.adjust_window_offset()
-        else:
-            self.insert_char(ord('\\'))
+                self.yank_mode_active = 'yank'
+                self.status = 'xtrac'
+            elif self.yank_mode_active == 'yank':
+                self.status = 'mark'
+        self.yanked_lines.add(current_line)
+        self.mode = 'line'
+        self.handle_down_arrow()
     def handle_ctrl_y(self):
-        if self.yank_mode_active and self.yanked_lines:
+        if self.yank_mode_active == 'yank' and self.yanked_lines:
             current_window = self.windows[self.context_window]
             self.clipboard = [current_window["text"][line] for line in sorted(self.yanked_lines)]
             self.yanked_lines.clear()
-            self.yank_mode_active = False
+            self.yank_mode_active = 'off'
             self.mode = 'line'
             self.status = 'yankd'
     def handle_ctrl_p(self):
@@ -470,6 +501,16 @@ class AIQuickKeyEditor:
             self.mode = 'line'
             self.status = 'paste'
             self.adjust_window_offset()
+    def handle_ctrl_k(self):
+        if self.context_window == 0 and self.mode == 'line':
+            self.windows[0]["line_num"] += self.top_window_size
+            if self.windows[0]["line_num"] >= len(self.windows[0]["text"]):
+                self.windows[0]["line_num"] = len(self.windows[0]["text"]) - 1
+            if self.windows[0]["col_num"] > len(self.windows[0]["text"][self.windows[0]["line_num"]]):
+                self.windows[0]["col_num"] = len(self.windows[0]["text"][self.windows[0]["line_num"]])
+            self.adjust_window_offset()
+        else:
+            self.insert_char(ord('\\'))
     def handle_ctrl_v(self):
         self.context.reset()
         self.context.get_cogtext_by_name(self.cognalities.next_cognality())
@@ -493,17 +534,23 @@ class AIQuickKeyEditor:
         if self.search_results:
             self.current_search_result = 0
             self.highlight_search_result()
-            self.status = f"fnd {len(self.search_results):02}"
+            self.status = f"fnd{len(self.search_results):02}"
             self.context_window = 0
         else:
             self.status = 'not f'
+    def search_offset(self):
+        for i in range(2):
+            window_size = self.top_window_size if i == 0 else self.bottom_window_size
+            middle_offset = max(0, self.windows[i]["line_num"] - window_size // 2)
+            self.window_offsets[i] = min(middle_offset, len(self.windows[i]["text"]) - window_size)
+            self.window_offsets[i] = max(0, self.window_offsets[i])
     def highlight_search_result(self):
         if not self.search_results:
             return
         line_num, col_num = self.search_results[self.current_search_result]
         self.windows[0]["line_num"] = line_num
         self.windows[0]["col_num"] = col_num
-        self.adjust_window_offset()
+        self.search_offset()
     def next_search_result(self):
         if self.search_results:
             self.current_search_result = (self.current_search_result + 1) % len(self.search_results)
@@ -512,6 +559,15 @@ class AIQuickKeyEditor:
         if self.search_results:
             self.current_search_result = (self.current_search_result - 1) % len(self.search_results)
             self.highlight_search_result()
+    def handle_ctrl_n(self):
+        if self.search_results:
+            self.next_search_result()
+        else:
+            current_window = self.windows[self.context_window]
+            current_window["line_num"] += curses.LINES - 1
+            if current_window["line_num"] >= len(current_window["text"]):
+                current_window["line_num"] = len(current_window["text"]) - 1
+            self.adjust_window_offset()
     def handle_sigint(self, sig, frame):
         self.stdscr.addstr(0, 0, "Ctrl-C, are you sure you want to exit? (Y/n):", curses.A_REVERSE | curses.A_BOLD)
         self.stdscr.refresh()
@@ -522,6 +578,18 @@ class AIQuickKeyEditor:
             elif ch == ord('n') or ch == ord('N'):
                 self.display()
                 return
+    def handle_sigtstp(self, sig, frame):
+        self.status = 'pause'
+        self.display()
+    def handle_del_key(self):
+        current_window = self.windows[self.context_window]
+        line = current_window["text"][current_window["line_num"]]
+        if current_window["col_num"] < len(line):
+            current_window["text"][current_window["line_num"]] = line[:current_window["col_num"]] + line[current_window["col_num"] + 1:]
+        elif current_window["col_num"] == len(line) and current_window["line_num"] < len(current_window["text"]) - 1:
+            next_line = current_window["text"].pop(current_window["line_num"] + 1)
+            current_window["text"][current_window["line_num"]] += next_line
+        self.adjust_window_offset()
     def handle_ctrl_a(self):
         self.context_window = 1 - self.context_window
         if self.context_window == 1:
@@ -543,50 +611,8 @@ class AIQuickKeyEditor:
         while True:
             self.display()
             ch = self.stdscr.getch()
-            if ch == curses.KEY_UP:
-                self.handle_up_arrow()
-            elif ch == curses.KEY_DOWN:
-                self.handle_down_arrow()
-            elif ch == curses.KEY_RIGHT:
-                self.handle_right_arrow()
-            elif ch == curses.KEY_LEFT:
-                self.handle_left_arrow()
-            elif ch == ord('\\'):
-                self.handle_backslash()
-            elif ch == ord('\n'):
-                self.handle_return()
-            elif ch in (curses.KEY_BACKSPACE, 127):
-                self.handle_backspace(ch)
-            elif ch == 11:  # ctrl-k
-                self.handle_ctrl_k()
-            elif ch == 23:
-                self.write_file()
-            elif ch == 18:
-                self.read_file()
-            elif ch == 1:
-                self.handle_ctrl_a()
-            elif ch == 16:
-                self.handle_ctrl_p()
-            elif ch == 6:  # Ctrl-F
-                self.search_text()
-            elif ch == 22:  # Ctrl-v
-                self.handle_ctrl_v()
-            elif ch == 14:  # Ctrl-N
-                self.next_search_result()
-            elif ch == 2:  # Ctrl-B
-                self.prev_search_result()
-            elif ch == 4:
-                self.delete_current_line()
-            elif ch == 20:
-                self.handle_ctrl_t()
-            elif ch == 25:
-                self.handle_ctrl_y()
-            elif ch == 24:  # Ctrl-X
-                self.handle_ctrl_x()
-            elif ch == 8:   # Ctrl-H
-                self.handle_ctrl_h()
-            elif ch == 7:  # Ctrl-G
-                self.handle_ctrl_g()
+            if ch in self.keymap:
+                self.keymap[ch]()
             else:
                 if self.windows[self.context_window]["line_num"] >= len(self.windows[self.context_window]["text"]):
                     self.windows[self.context_window]["text"].append('')
