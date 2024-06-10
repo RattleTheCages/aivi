@@ -7,6 +7,7 @@
 #This work is copyright. All rights reserved.
 
 import os
+import re
 import json
 import argparse
 import curses
@@ -21,8 +22,8 @@ client = OpenAI(api_key=os.environ.get("CUSTOM_ENV_NAME"))
 class CogEngine:
     request_counter = 0
     @classmethod
-    def get_unique_request_counter(cls, file_base_name):
-        while os.path.exists(f'{file_base_name}_{cls.request_counter}.txt'):
+    def get_unique_request_counter(cls, file_base_name, suffix):
+        while os.path.exists(f'{file_base_name}_{cls.request_counter}{suffix}'):
             cls.update_request_counter()
         return cls.request_counter
     @classmethod
@@ -32,10 +33,16 @@ class CogEngine:
     @classmethod
     def reset_request_counter(cls):
         cls.request_counter = 0
+    @staticmethod
+    def create_unique_filename(base_name, extension):
+        base_name = os.path.splitext(base_name)[0]
+        unique_id = CogEngine.get_unique_request_counter(base_name, extension)
+        return f"{base_name}.{unique_id}{extension}"
     def __init__(self, cognalities):
         self.cognalities = cognalities
         self.cogessages = []
         self.usermsg = []
+        self.session_name = ""
     def reset(self):
         self.cogessages = []
         self.usermsg = []
@@ -69,6 +76,29 @@ class CogEngine:
                 self.cognalities.model = data.get('model', '')
                 self.cognalities.max_tokens = data.get('max_tokens', 0)
                 self.cogessages = [{"role": item['role'], "content": item['content']} for item in data.get('messages', [])]
+    def extract_functions(self, content):
+        function_pattern = re.compile(r'def\s+(\w+)\s*\((.*?)\):')
+        matches = function_pattern.finditer(content)
+        functions = []
+        for match in matches:
+            func_name = match.group(1)
+            start_pos = match.start()
+            lines = content[start_pos:].splitlines()
+            code_block = []
+            indent_level = None
+            for line in lines:
+                stripped_line = line.lstrip()
+                if stripped_line and indent_level is None:
+                    indent_level = len(line) - len(stripped_line)
+                if indent_level is not None:
+                    if len(line) - len(stripped_line) < indent_level and stripped_line:
+                        break
+                    code_block.append(line)
+            functions.append({
+                'name': func_name,
+                'code': '\n'.join(code_block)
+            })
+        return functions
 
 class Cognalities:
     def __init__(self):
@@ -76,13 +106,14 @@ class Cognalities:
             'Spelling': {
                 'attributes': [
                     'Your only task correct mispelled words.',
-                    'Answer strictly only using the correctly spelled words, do not change punctuation or sentence structure.',
                     'Take each sentence and output a corresponding corrected sentence.',
-                    'The user wants the answer strictly formatted as the question.'
+                    'Answer only using the correctly spelled words, do not change punctuation or sentence structure.',
+                    'Do not change the placement of the new lines.',
+                    'The user wants the answer strictly formatted as the sample sentence.'
                 ],
                 'model': 'gpt-3.5-turbo',
                 'max_tokens': 298,
-                'flags': {'concatenate': False, 'replace': True}
+                'flags': {'concatenate': False, 'replace': False, 'inline': True}
             },
             'Python Coder': {
                 'attributes': [
@@ -95,7 +126,7 @@ class Cognalities:
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
-                'flags': {'concatenate': True, 'replace': False}
+                'flags': {'concatenate': True, 'replace': False, 'inline': False}
             },
             'Spelling and Grammar': {
                 'attributes': [
@@ -104,13 +135,13 @@ class Cognalities:
                 ],
                 'model': 'gpt-4',
                 'max_tokens': 698,
-                'flags': {'concatenate': False, 'replace': True}
+                'flags': {'concatenate': True, 'replace': False, 'inline': False}
             },
             'Freestyle': {
                 'attributes': [],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
-                'flags': {'concatenate': True, 'replace': False}
+                'flags': {'concatenate': True, 'replace': False, 'inline': False}
             },
             'Telephone': {
                 'attributes': [
@@ -118,7 +149,7 @@ class Cognalities:
                 ],
                 'model': 'gpt-4',
                 'max_tokens': 698,
-                'flags': {'concatenate': True, 'replace': False}
+                'flags': {'concatenate': True, 'replace': False, 'inline': False}
             }
         }
         self.names = list(self.cognalities.keys())
@@ -127,8 +158,6 @@ class Cognalities:
         return self.names[self.current_index]
     def get_attributes(self):
         return self.cognalities[self.get_current_name()]['attributes']
-    def next_cognality(self):
-        self.current_index = 0
     def get_current_name(self):
         return self.names[self.current_index]
     def get_attributes(self):
@@ -340,9 +369,8 @@ class AIQuickKeyEditor:
         self.mode = 'edit'
     def handle_backslash(self):
         file_base_name = os.path.splitext(self.filename)[0]
-        request_id = CogEngine.get_unique_request_counter(file_base_name)
-        before_context_filename = f'{file_base_name}_before_context_{request_id}.json'
-        ai_context_filename = f'{file_base_name}_ai_context_{request_id}.json'
+        before_context_filename = CogEngine.create_unique_filename(file_base_name, '_before_context.json')
+        ai_context_filename = CogEngine.create_unique_filename(file_base_name, '_ai_context.json')
         self.context.reset()
         chosen_attributes = self.cognalities.get_attributes()
         for attribute in chosen_attributes:
@@ -354,16 +382,23 @@ class AIQuickKeyEditor:
                     userlines += line + '\n'
             self.context.add_cogtext("user", userlines)
         else:
-            userlines = ""
-            for line in self.windows[1]["text"]:
-                if line.strip():
-                    userlines += line + '\n'
-            self.context.add_cogtext("system", userlines)
-            userlines = ""
-            for line in self.windows[0]["text"]:
-                if line.strip():
-                    userlines += line + '\n'
-            self.context.add_cogtext("user", userlines)
+            flags = self.cognalities.get_flags()
+            if flags['inline']:
+                current_window = self.windows[self.context_window]
+                current_line_index = current_window["line_num"]
+                user_line = current_window["text"][current_line_index]
+                self.context.add_cogtext("user", user_line)
+            else:    
+                userlines = ""
+                for line in self.windows[1]["text"]:
+                    if line.strip():
+                        userlines += line + '\n'
+                self.context.add_cogtext("system", userlines)
+                userlines = ""
+                for line in self.windows[0]["text"]:
+                    if line.strip():
+                        userlines += line + '\n'
+                self.context.add_cogtext("user", userlines)
         self.context.save_cogtext(before_context_filename)
         self.write_file()
         self.clipboard = [line for line in self.windows[self.context_window]["text"]]
@@ -375,18 +410,24 @@ class AIQuickKeyEditor:
             max_tokens=self.cognalities.get_maxtokens(),
             messages=self.context.get_cogtext()
         )
+        func = self.context.extract_functions(completion.choices[0].message.content)
+        for funct in func:
+            self.windows[1]["text"].extend({funct['name']})
+            print(f"Function: {funct['name']}")
+            print(f"Code:\n{funct['code']}\n")
         self.context.add_cogtext("assistant", completion.choices[0].message.content)
         self.context.save_cogtext(ai_context_filename)
-        flags = self.cognalities.get_flags()
         response_text = completion.choices[0].message.content.split('\n')
-        if flags['replace']:
+        flags = self.cognalities.get_flags()
+        if flags['inline']:
+            current_window["text"][current_line_index] = response_text[0]
+        elif flags['replace']:
             self.windows[self.context_window]["text"] = response_text
         elif flags['concatenate']:
             self.windows[self.context_window]["text"].extend(response_text)
             self.windows[self.context_window]["text"].extend('\n')
-        self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
-        self.windows[self.context_window]["col_num"] = len(self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]])
-        self.write_file()
+            self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
+            self.windows[self.context_window]["col_num"] = len(self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]])
         self.mode = 'reply'
         self.stdscr.nodelay(True)
         try:
@@ -399,22 +440,14 @@ class AIQuickKeyEditor:
     def write_file(self):
         try:
             file_base_name, file_suffix = os.path.splitext(self.filename)
-            while True:
-                request_id = CogEngine.update_request_counter()
-                backup_filename = f'{file_base_name}.{request_id}{file_suffix}'
-                if not os.path.exists(backup_filename):
-                    break
+            backup_filename = CogEngine.create_unique_filename(self.filename, file_suffix)
             if os.path.exists(self.filename):
                 os.rename(self.filename, backup_filename)
             with open(self.filename, 'w+') as f:
                 for line in self.windows[0]["text"]:
                     f.write(line + '\n')
             ctx_filename = f'{file_base_name}.ctx'
-            while True:
-                ctx_rename = f'{file_base_name}.{request_id}.ctx'
-                if not os.path.exists(ctx_rename):
-                    break
-                request_id = CogEngine.update_request_counter()
+            ctx_rename = CogEngine.create_unique_filename(file_base_name, '.ctx')
             if os.path.exists(ctx_filename):
                 os.rename(ctx_filename, ctx_rename)
             with open(ctx_filename, 'w+') as f:
@@ -517,7 +550,9 @@ class AIQuickKeyEditor:
         self.adjust_window_offset()
         self.display()
     def search_text(self):
-        search_term = "\n".join(self.windows[1]["text"]).strip()
+        bottom_window = self.windows[1]["text"]
+        current_line_number = self.windows[1]["line_num"]
+        search_term = bottom_window[current_line_number].strip()
         if not search_term:
             self.status = 'no tm'
             return
