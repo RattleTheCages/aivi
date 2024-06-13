@@ -3,7 +3,7 @@
 #This editor is a fully functioning editor that offers AI assistance.
 #The top window is where you enter text and edit it; the bottom window is the AI command window, where you can enter requests for AI assistance.
 #Use ctrl-v to choose the type of AI assistance you need, such as grammar and spelling corrections, or Python coding.
-#In freestyle mode, one can enter any question or content, similar to a well-known subscription AI interface.
+#In freestyle, one can enter any question or content, similar to a well-known subscription AI interface.
 #This work is copyright. All rights reserved.
 
 import os
@@ -113,7 +113,7 @@ class Cognalities:
                 ],
                 'model': 'gpt-3.5-turbo',
                 'max_tokens': 298,
-                'flags': {'concatenate': False, 'replace': False, 'inline': True}
+                'textops': {'concatenate': False, 'replace': False, 'inline': True, 'coder': False}
             },
             'Python Coder': {
                 'attributes': [
@@ -126,30 +126,30 @@ class Cognalities:
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
-                'flags': {'concatenate': True, 'replace': False, 'inline': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
             },
             'Spelling and Grammar': {
                 'attributes': [
                     'Your task is to spell and grammar check the given sentences.'
                     #'If needed, rewrite the sentences at a higher education level.'
                 ],
-                'model': 'gpt-4',
+                'model': 'gpt-4o',
                 'max_tokens': 698,
-                'flags': {'concatenate': True, 'replace': False, 'inline': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
             },
             'Freestyle': {
                 'attributes': [],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
-                'flags': {'concatenate': True, 'replace': False, 'inline': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
             },
             'Telephone': {
                 'attributes': [
                     "This is the children's game of 'telephone', play nicely."
                 ],
-                'model': 'gpt-4',
+                'model': 'gpt-4o',
                 'max_tokens': 698,
-                'flags': {'concatenate': True, 'replace': False, 'inline': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
             }
         }
         self.names = list(self.cognalities.keys())
@@ -171,8 +171,8 @@ class Cognalities:
         return self.cognalities[self.get_current_name()]['model']
     def get_maxtokens(self):
         return self.cognalities[self.get_current_name()]['max_tokens']
-    def get_flags(self):
-        return self.cognalities[self.get_current_name()]['flags']
+    def get_textops(self):
+        return self.cognalities[self.get_current_name()]['textops']
 
 class AIQuickKeyEditor:
     def __init__(self, stdscr):
@@ -224,6 +224,7 @@ class AIQuickKeyEditor:
             8: self.handle_ctrl_h,
             7: self.handle_ctrl_g,
             14: self.handle_ctrl_n,
+            #21: self.handle_ctrl_u
             #43: self.increase_top_window_size,
             #45: self.decrease_top_window_size,
         }
@@ -331,6 +332,7 @@ class AIQuickKeyEditor:
                 self.clipboard = undo_content
                 if self.status == 'undo':
                     self.status = 'redo'
+                    self.display()
                 else:
                     self.status = 'undo'
                 if current_window["line_num"] >= len(current_window["text"]):
@@ -373,20 +375,24 @@ class AIQuickKeyEditor:
         ai_context_filename = CogEngine.create_unique_filename(file_base_name, '_ai_context.json')
         self.context.reset()
         chosen_attributes = self.cognalities.get_attributes()
+        textops = self.cognalities.get_textops()
         for attribute in chosen_attributes:
             self.context.add_cogtext("system", attribute)
         if self.context_window == 1:
-            userlines = ""
-            for line in self.windows[1]["text"]:
-                if line.strip():
-                    userlines += line + '\n'
-            self.context.add_cogtext("user", userlines)
+            if textops['inline']:
+                current_line_number = self.windows[self.context_window]["line_num"]
+                user_line = self.windows[self.context_window]["text"][current_line_number].strip()
+                self.context.add_cogtext("user", user_line)
+            else:
+                userlines = ""
+                for line in self.windows[1]["text"]:
+                    if line.strip():
+                        userlines += line + '\n'
+                self.context.add_cogtext("user", userlines)
         else:
-            flags = self.cognalities.get_flags()
-            if flags['inline']:
-                current_window = self.windows[self.context_window]
-                current_line_index = current_window["line_num"]
-                user_line = current_window["text"][current_line_index]
+            if textops['inline']:
+                current_line_number = self.windows[self.context_window]["line_num"]
+                user_line = self.windows[self.context_window]["text"][current_line_number].strip()
                 self.context.add_cogtext("user", user_line)
             else:    
                 userlines = ""
@@ -410,24 +416,42 @@ class AIQuickKeyEditor:
             max_tokens=self.cognalities.get_maxtokens(),
             messages=self.context.get_cogtext()
         )
-        func = self.context.extract_functions(completion.choices[0].message.content)
-        for funct in func:
-            self.windows[1]["text"].extend({funct['name']})
-            print(f"Function: {funct['name']}")
-            print(f"Code:\n{funct['code']}\n")
         self.context.add_cogtext("assistant", completion.choices[0].message.content)
         self.context.save_cogtext(ai_context_filename)
         response_text = completion.choices[0].message.content.split('\n')
-        flags = self.cognalities.get_flags()
-        if flags['inline']:
-            current_window["text"][current_line_index] = response_text[0]
-        elif flags['replace']:
+        textops = self.cognalities.get_textops()
+        if textops['coder']:
+            func = self.context.extract_functions(completion.choices[0].message.content)
+            for funct in func:
+                self.windows[1]["text"].extend({funct['name']})
+                #print(f"Function: {funct['name']}")
+                #print(f"Code:\n{funct['code']}\n")
+                with open("debug_info.txt", "a") as f:
+                    f.write(f"Function: {funct['name']}\n")
+                    f.write(f"Code:\n{funct['code']}\n\n")
+            #self.add_functions_to_edit_window(func)
+            self.insert_lines_at_current_line("'''")
+            self.insert_lines_at_current_line("Entire AI reply --coder:")
+            self.windows[self.context_window]["text"].extend(response_text)
+            self.windows[self.context_window]["text"].extend('\n')
+            self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) + 1
+            self.insert_lines_at_current_line("'''")
+        if textops['inline']:
+            self.insert_as_current_line(response_text[0])
+        if textops['replace']:
             self.windows[self.context_window]["text"] = response_text
-        elif flags['concatenate']:
+        if textops['concatenate']:
+            bline = len(self.windows[self.context_window]["text"])
+            self.windows[self.context_window]["line_num"] = bline
+            self.insert_lines_at_current_line("'''")
+            self.insert_lines_at_current_line("Entire AI reply --concatenate:")
             self.windows[self.context_window]["text"].extend(response_text)
             self.windows[self.context_window]["text"].extend('\n')
             self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
             self.windows[self.context_window]["col_num"] = len(self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]])
+            self.insert_lines_at_current_line(" ")
+            self.insert_lines_at_current_line("'''")
+            self.windows[self.context_window]["line_num"] = bline
         self.mode = 'reply'
         self.stdscr.nodelay(True)
         try:
@@ -437,6 +461,7 @@ class AIQuickKeyEditor:
         finally:
             self.stdscr.nodelay(False)
         self.adjust_window_offset()
+    #def add_functions_to_edit_window(self, functions):
     def write_file(self):
         try:
             file_base_name, file_suffix = os.path.splitext(self.filename)
@@ -594,6 +619,36 @@ class AIQuickKeyEditor:
         if self.search_results:
             self.current_search_result = (self.current_search_result - 1) % len(self.search_results)
             self.highlight_search_result()
+    def insert_lines_at_current_line(self, text):
+        lines = text.split('\n')
+        current_window = self.windows[self.context_window]
+        current_line_index = current_window["line_num"]
+        current_column_index = current_window["col_num"]
+        first_line = current_window["text"][current_line_index] if current_line_index < len(current_window["text"]) else ""
+        new_first_line = first_line[:current_column_index] + lines[0]
+        if current_column_index < len(first_line):
+            new_first_line += first_line[current_column_index:]
+        if current_line_index < len(current_window["text"]):
+            current_window["text"][current_line_index] = new_first_line
+        else:
+            current_window["text"].append(new_first_line)
+        for line in reversed(lines[1:]):
+            current_window["text"].insert(current_line_index + 1, line)
+            current_line_index += 1
+        current_window["line_num"] += len(lines) - 1
+        current_window["col_num"] = len(lines[-1])
+        if current_window["line_num"] >= len(current_window["text"]):
+            current_window["text"].append("")
+        current_window["line_num"] += 1
+        self.adjust_window_offset()
+    def handle_ctrl_u(self):
+        self.status = "Insert text: "
+        self.display()
+        curses.echo()
+        curses.curs_set(1)
+        input_text = self.stdscr.getstr(0, 14, 60).decode('utf-8')
+        self.insert_at_current_line(input_text)
+        curses.noecho()
     def handle_ctrl_n(self):
         if self.search_results:
             self.next_search_result()
@@ -604,7 +659,7 @@ class AIQuickKeyEditor:
                 current_window["line_num"] = len(current_window["text"]) - 1
             self.adjust_window_offset()
     def handle_sigint(self, sig, frame):
-        self.stdscr.addstr(0, 0, "Ctrl-C, are you sure you want to exit? (Y/n):", curses.A_REVERSE | curses.A_BOLD)
+        self.stdscr.addstr(37, 0, "Ctrl-C, are you sure you want to exit? (Y/n):", curses.A_REVERSE | curses.A_BOLD)
         self.stdscr.refresh()
         while True:
             ch = self.stdscr.getch()
