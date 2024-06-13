@@ -619,6 +619,11 @@ class AIQuickKeyEditor:
         if self.search_results:
             self.current_search_result = (self.current_search_result - 1) % len(self.search_results)
             self.highlight_search_result()
+    def insert_as_current_line(self, text):
+        current_window = self.windows[self.context_window]
+        current_window["text"][current_window["line_num"]] = text
+        current_window["col_num"] = len(text)
+        self.adjust_window_offset()
     def insert_lines_at_current_line(self, text):
         lines = text.split('\n')
         current_window = self.windows[self.context_window]
