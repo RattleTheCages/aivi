@@ -97,7 +97,6 @@ class CogEngine:
                 'code': '\n'.join(code_block)
             })
         return functions
-
 class Cognalities:
     def __init__(self):
         self.cognalities = {
@@ -424,16 +423,11 @@ class AIQuickKeyEditor:
             func = self.context.extract_functions(completion.choices[0].message.content)
             for funct in func:
                 self.windows[1]["text"].extend({funct['name']})
-                with open("debug_info.txt", "a") as f:
+                with open("debug_info.txt", "w") as f:
+                    #f.write(f"Object:\n{funct['object']}\n\n")
                     f.write(f"Function: {funct['name']}\n")
                     f.write(f"Code:\n{funct['code']}\n\n")
-            #self.add_functions_to_edit_window(func)
-            #self.insert_lines_at_current_line("'''")
-            #self.insert_lines_at_current_line("Entire AI reply --coder:")
-            #self.windows[self.context_window]["text"].extend(response_text)
-            #self.windows[self.context_window]["text"].extend('\n')
-            #self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) + 1
-            #self.insert_lines_at_current_line("'''")
+            self.add_functions_to_edit_window(func)
         if textops['inline']:
             self.insert_as_current_line(response_text[0])
         if textops['replace']:
@@ -459,7 +453,21 @@ class AIQuickKeyEditor:
         finally:
             self.stdscr.nodelay(False)
         self.adjust_window_offset()
-    #def add_functions_to_edit_window(self, functions):
+    def add_functions_to_edit_window(self, functions):
+        top_window = self.windows[0]["text"]
+        for function in functions:
+            func_name = function['name']
+            func_code = function['code']
+            for i, line in enumerate(top_window):
+                if func_name in line and line.strip().startswith("def"):
+                    insert_pos = i + 1
+                    commented_code = [f"# {line}" for line in func_code.split('\n')]
+                    self.windows[0]["text"] = (
+                        top_window[:insert_pos] +
+                        commented_code +
+                        top_window[insert_pos:]
+                    )
+                    break
     def write_file(self):
         try:
             edit_filename = self.context.get_editfilename()
@@ -759,5 +767,7 @@ def main(stdscr):
     editor.run()
 if __name__ == "__main__":
     curses.wrapper(main)
+
+
 
 
