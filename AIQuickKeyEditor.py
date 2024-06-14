@@ -15,34 +15,32 @@ import signal
 from openai import OpenAI
 
 parser = argparse.ArgumentParser()
-parser.add_argument('file', nargs='?', default=None)
+parser.add_argument('session', nargs='?', default=None)
 args = parser.parse_args()
 client = OpenAI(api_key=os.environ.get("CUSTOM_ENV_NAME"))
 
 class CogEngine:
-    request_counter = 0
-    @classmethod
-    def get_unique_request_counter(cls, file_base_name, suffix):
-        while os.path.exists(f'{file_base_name}_{cls.request_counter}{suffix}'):
-            cls.update_request_counter()
-        return cls.request_counter
-    @classmethod
-    def update_request_counter(cls):
-        cls.request_counter += 1
-        return cls.request_counter
-    @classmethod
-    def reset_request_counter(cls):
-        cls.request_counter = 0
-    @staticmethod
-    def create_unique_filename(base_name, extension):
-        base_name = os.path.splitext(base_name)[0]
-        unique_id = CogEngine.get_unique_request_counter(base_name, extension)
-        return f"{base_name}.{unique_id}{extension}"
-    def __init__(self, cognalities):
+    def __init__(self, cognalities, session_name_with_suffix):
+        self.original_filename = session_name_with_suffix
+        self.session_name, self.session_suffix = os.path.splitext(session_name_with_suffix)
+        self.rev_num = self.find_latest_rev_num()
         self.cognalities = cognalities
         self.cogessages = []
         self.usermsg = []
-        self.session_name = ""
+        self.cog_filename = f'{self.session_name}.cog.{self.rev_num}{self.session_suffix}'
+        self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
+    def find_latest_rev_num(self):
+        files = os.listdir('.')
+        pattern = re.compile(rf'{re.escape(self.session_name)}\.(\d+){re.escape(self.session_suffix)}')
+        max_rev = 0
+        for file in files:
+            match = pattern.match(file)
+            if match:
+                rev_num = int(match.group(1))
+                max_rev = max(max_rev, rev_num)
+        return max_rev
+    def get_editfilename(self):
+        return self.edit_filename
     def reset(self):
         self.cogessages = []
         self.usermsg = []
@@ -62,16 +60,16 @@ class CogEngine:
         return context
     def add_usermsg(self, msg):
         self.usermsg.append(msg)
-    def save_cogtext(self, filename):
-        with open(filename, 'w') as f:
+    def save_cogtext(self):
+        with open(self.cog_filename, 'w') as f:
             json.dump({
                 "model": self.cognalities.get_model(),
                 "max_tokens": self.cognalities.get_maxtokens(),
                 "messages": self.get_cogtext()
             }, f)
-    def load_cogtext(self, filename):
-        if os.path.exists(filename):
-            with open(filename, 'r') as f:
+    def load_cogtext(self):
+        if os.path.exists(cog.filename):
+            with open(cog.filename, 'r') as f:
                 data = json.load(f)
                 self.cognalities.model = data.get('model', '')
                 self.cognalities.max_tokens = data.get('max_tokens', 0)
@@ -126,11 +124,16 @@ class Cognalities:
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
-                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': True}
             },
-            'Spelling and Grammar': {
+            'Grammar': {
                 'attributes': [
-                    'Your task is to spell and grammar check the given sentences.'
+                    'Your task is to spell and grammar check the given sentences.',
+                    'After correcting the spelling provide an alternate grammatical phrasing.',
+                    'In the alternate phrasing please include line breaks at about the same frequency as the input text.',
+                    'In the alternate phrasing try to offer the phrasing in a style of the original',
+                    'For example, if the style is technical or professional, offer rephrasing in at the same level, or higher, of grammar and content rephrasing.',
+                    'If the style is less professional your reply does not have to be as stringent.'
                     #'If needed, rewrite the sentences at a higher education level.'
                 ],
                 'model': 'gpt-4o',
@@ -182,8 +185,8 @@ class AIQuickKeyEditor:
         self.status = 'hello'
         self.clipboard = []
         self.yanked_lines = set()
-        self.del_lines = set()
         self.yank_mode_active = 'off'
+        self.del_lines = set()
         self.context_window = 1
         self.search_results = []
         self.current_search_result = -1
@@ -196,8 +199,7 @@ class AIQuickKeyEditor:
         self.bottom_window_size = 10
         self.cognalities = Cognalities()
         self.personalchoice = self.cognalities.get_current_name()
-        self.context = CogEngine(self.cognalities)
-        self.filename = args.file if args.file else 'quickAi.txt'
+        self.context = CogEngine(self.cognalities, args.session)
         self.keymap = {
             curses.KEY_UP: self.handle_up_arrow,
             curses.KEY_DOWN: self.handle_down_arrow,
@@ -228,8 +230,8 @@ class AIQuickKeyEditor:
             #43: self.increase_top_window_size,
             #45: self.decrease_top_window_size,
         }
-        if os.path.exists(self.filename):
-            self.read_file()
+        if os.path.exists(args.session):
+            self.read_file(args.session)
         else:
             self.show_splash_screen()
     def handle_return(self):
@@ -335,6 +337,7 @@ class AIQuickKeyEditor:
                     self.display()
                 else:
                     self.status = 'undo'
+                    self.display()
                 if current_window["line_num"] >= len(current_window["text"]):
                     current_window["line_num"] = len(current_window["text"]) - 1
                 if current_window["line_num"] < 0:
@@ -370,9 +373,6 @@ class AIQuickKeyEditor:
             current_window["col_num"] -= 1
         self.mode = 'edit'
     def handle_backslash(self):
-        file_base_name = os.path.splitext(self.filename)[0]
-        before_context_filename = CogEngine.create_unique_filename(file_base_name, '_before_context.json')
-        ai_context_filename = CogEngine.create_unique_filename(file_base_name, '_ai_context.json')
         self.context.reset()
         chosen_attributes = self.cognalities.get_attributes()
         textops = self.cognalities.get_textops()
@@ -405,7 +405,7 @@ class AIQuickKeyEditor:
                     if line.strip():
                         userlines += line + '\n'
                 self.context.add_cogtext("user", userlines)
-        self.context.save_cogtext(before_context_filename)
+        self.context.save_cogtext()
         self.write_file()
         self.clipboard = [line for line in self.windows[self.context_window]["text"]]
         # I am a fluffy unicorn, with light green spots.
@@ -417,25 +417,23 @@ class AIQuickKeyEditor:
             messages=self.context.get_cogtext()
         )
         self.context.add_cogtext("assistant", completion.choices[0].message.content)
-        self.context.save_cogtext(ai_context_filename)
+        self.context.save_cogtext()
         response_text = completion.choices[0].message.content.split('\n')
         textops = self.cognalities.get_textops()
         if textops['coder']:
             func = self.context.extract_functions(completion.choices[0].message.content)
             for funct in func:
                 self.windows[1]["text"].extend({funct['name']})
-                #print(f"Function: {funct['name']}")
-                #print(f"Code:\n{funct['code']}\n")
                 with open("debug_info.txt", "a") as f:
                     f.write(f"Function: {funct['name']}\n")
                     f.write(f"Code:\n{funct['code']}\n\n")
             #self.add_functions_to_edit_window(func)
-            self.insert_lines_at_current_line("'''")
-            self.insert_lines_at_current_line("Entire AI reply --coder:")
-            self.windows[self.context_window]["text"].extend(response_text)
-            self.windows[self.context_window]["text"].extend('\n')
-            self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) + 1
-            self.insert_lines_at_current_line("'''")
+            #self.insert_lines_at_current_line("'''")
+            #self.insert_lines_at_current_line("Entire AI reply --coder:")
+            #self.windows[self.context_window]["text"].extend(response_text)
+            #self.windows[self.context_window]["text"].extend('\n')
+            #self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) + 1
+            #self.insert_lines_at_current_line("'''")
         if textops['inline']:
             self.insert_as_current_line(response_text[0])
         if textops['replace']:
@@ -464,27 +462,28 @@ class AIQuickKeyEditor:
     #def add_functions_to_edit_window(self, functions):
     def write_file(self):
         try:
-            file_base_name, file_suffix = os.path.splitext(self.filename)
-            backup_filename = CogEngine.create_unique_filename(self.filename, file_suffix)
-            if os.path.exists(self.filename):
-                os.rename(self.filename, backup_filename)
-            with open(self.filename, 'w+') as f:
+            edit_filename = self.context.get_editfilename()
+            if os.path.exists(edit_filename):
+                new_rev_num = self.context.find_latest_rev_num() + 1
+                new_filename = f"{self.context.session_name}.{new_rev_num}{self.context.session_suffix}"
+                os.rename(edit_filename, new_filename)
+            with open(edit_filename, 'w') as f:
                 for line in self.windows[0]["text"]:
                     f.write(line + '\n')
-            ctx_filename = f'{file_base_name}.ctx'
-            ctx_rename = CogEngine.create_unique_filename(file_base_name, '.ctx')
-            if os.path.exists(ctx_filename):
-                os.rename(ctx_filename, ctx_rename)
-            with open(ctx_filename, 'w+') as f:
+            with open(self.context.original_filename, 'w') as f:
+                for line in self.windows[0]["text"]:
+                    f.write(line + '\n')
+            ctx_filename = f"{self.context.get_editfilename()}.ctx"
+            with open(ctx_filename, 'w') as f:
                 for line in self.windows[1]["text"]:
                     f.write(line + '\n')
                 f.write(self.cognalities.get_current_name() + '\n')
             self.status = "wrote"
         except Exception as e:
             self.status = "no wr"
-    def read_file(self):
+    def read_file(self, filename):
         try:
-            with open(self.filename, 'r') as f:
+            with open(filename, 'r') as f:
                 lines = [line.rstrip('\n') for line in f]
             self.windows[0]["text"] = lines
             self.windows[1]["text"] = [""]
@@ -493,16 +492,13 @@ class AIQuickKeyEditor:
             self.windows[1]["line_num"] = 0
             self.windows[1]["col_num"] = 0
             self.status = "read "
-            CogEngine.reset_request_counter()
+            self.context.reset_request_counter()
             self.adjust_window_offset()
-        except PermissionError:
-            self.status = "denid"
-        except IsADirectoryError:
-            self.status = "dir  "
-        except IOError:
-            self.status = "IO er"
-        except ValueError as err:
-            self.status = "empty"
+        except Exception as e:
+            if isinstance(e, PermissionError):
+                self.status = "denid"
+            elif isinstance(e, IsADirectoryError):
+                self.status = "dir  "
     def delete_current_line(self):
         self.status = 'delln'
         current_window = self.windows[self.context_window]
