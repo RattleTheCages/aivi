@@ -3,7 +3,7 @@
 #This editor is a fully functioning editor that offers AI assistance.
 #The top window is where you enter text and edit it; the bottom window is the AI command window, where you can enter requests for AI assistance.
 #Use ctrl-v to choose the type of AI assistance you need, such as grammar and spelling corrections, or Python coding.
-#In freestyle, one can enter any question or content, similar to a well-known subscription AI interface.
+#In freestyle viewpoint, one can enter any question or content, similar to a well-known subscription AI interface.
 #This work is copyright. All rights reserved.
 
 import os
@@ -15,12 +15,14 @@ import signal
 from openai import OpenAI
 
 parser = argparse.ArgumentParser()
-parser.add_argument('session', nargs='?', default=None)
+parser.add_argument('session', nargs='?', default="quickAi.txt")
 args = parser.parse_args()
 client = OpenAI(api_key=os.environ.get("CUSTOM_ENV_NAME"))
 
 class CogEngine:
     def __init__(self, cognalities, session_name_with_suffix):
+        if session_name_with_suffix is None:
+            session_name_with_suffix = 'quickAi.txt'
         self.original_filename = session_name_with_suffix
         self.session_name, self.session_suffix = os.path.splitext(session_name_with_suffix)
         self.rev_num = self.find_latest_rev_num()
@@ -75,29 +77,40 @@ class CogEngine:
                 self.cognalities.max_tokens = data.get('max_tokens', 0)
                 self.cogessages = [{"role": item['role'], "content": item['content']} for item in data.get('messages', [])]
     def extract_functions(self, content):
-        function_pattern = re.compile(r'def\s+(\w+)\s*\((.*?)\):')
+        function_pattern = re.compile(r'class\s+(\w+)|def\s+(\w+)\s*\((.*?)\):')
         matches = function_pattern.finditer(content)
         functions = []
+        current_class = None
         for match in matches:
-            func_name = match.group(1)
-            start_pos = match.start()
-            lines = content[start_pos:].splitlines()
-            code_block = []
-            indent_level = None
-            for line in lines:
-                stripped_line = line.lstrip()
-                if stripped_line and indent_level is None:
-                    indent_level = len(line) - len(stripped_line)
-                if indent_level is not None:
-                    if len(line) - len(stripped_line) < indent_level and stripped_line:
-                        break
-                    code_block.append(line)
-            functions.append({
-                'name': func_name,
-                'code': '\n'.join(code_block)
-            })
+            if match.group(1):  # Found a class
+                current_class = match.group(1)
+            else:  # Found a function
+                func_name = match.group(2)
+                start_pos = match.start()
+                lines = content[start_pos:].splitlines()
+                code_block = []
+                indent_level = None
+                for line in lines:
+                    stripped_line = line.lstrip()
+                    if stripped_line and indent_level is None:
+                        indent_level = len(line) - len(stripped_line)
+                    if indent_level is not None:
+                        if len(line) - len(stripped_line) < indent_level and stripped_line:
+                            break
+                        code_block.append(line)
+                functions.append({
+                    'name': func_name,
+                    'object': current_class,
+                    'code': '\n'.join(code_block)
+                })
+        with open("debug_info.txt", "w") as f:
+            for funct in functions:
+                f.write(f"Object: {funct['object']}\n")
+                f.write(f"Function: {funct['name']}\n")
+                f.write(f"Code:\n{funct['code']}\n\n")
         return functions
-class Cognalities:
+
+class Viewpoints:
     def __init__(self):
         self.cognalities = {
             'Spelling': {
@@ -196,7 +209,7 @@ class AIQuickKeyEditor:
         self.window_offsets = [0, 0]
         self.top_window_size = 38
         self.bottom_window_size = 10
-        self.cognalities = Cognalities()
+        self.cognalities = Viewpoints()
         self.personalchoice = self.cognalities.get_current_name()
         self.context = CogEngine(self.cognalities, args.session)
         self.keymap = {
@@ -407,6 +420,12 @@ class AIQuickKeyEditor:
         self.context.save_cogtext()
         self.write_file()
         self.clipboard = [line for line in self.windows[self.context_window]["text"]]
+        ctx_filename = f"{self.context.get_editfilename()}.ctx"
+        with open(ctx_filename, 'a') as f:
+            f.write(f"{self.cognalities.get_current_name()}>\n")
+            for line in self.windows[1]["text"]:
+                if line.strip():
+                    f.write(line + '\n')
         # I am a fluffy unicorn, with light green spots.
         self.status = 'ai *'
         self.display()
@@ -418,15 +437,16 @@ class AIQuickKeyEditor:
         self.context.add_cogtext("assistant", completion.choices[0].message.content)
         self.context.save_cogtext()
         response_text = completion.choices[0].message.content.split('\n')
+        with open(ctx_filename, 'a') as f:
+            for line in response_text:
+                if line.strip():
+                    f.write(line + '\n')
         textops = self.cognalities.get_textops()
         if textops['coder']:
+            #aicode = self.context.extract_AI_code(completion.choices[0].message.content)
             func = self.context.extract_functions(completion.choices[0].message.content)
             for funct in func:
                 self.windows[1]["text"].extend({funct['name']})
-                with open("debug_info.txt", "w") as f:
-                    #f.write(f"Object:\n{funct['object']}\n\n")
-                    f.write(f"Function: {funct['name']}\n")
-                    f.write(f"Code:\n{funct['code']}\n\n")
             self.add_functions_to_edit_window(func)
         if textops['inline']:
             self.insert_as_current_line(response_text[0])
@@ -436,7 +456,7 @@ class AIQuickKeyEditor:
             bline = len(self.windows[self.context_window]["text"])
             self.windows[self.context_window]["line_num"] = bline
             self.insert_lines_at_current_line("'''")
-            self.insert_lines_at_current_line("Entire AI reply --concatenate:")
+            self.insert_lines_at_current_line(f"[{self.cognalities.get_current_name()}][AI viewpoint][--concatenate]")
             self.windows[self.context_window]["text"].extend(response_text)
             self.windows[self.context_window]["text"].extend('\n')
             self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
@@ -458,10 +478,12 @@ class AIQuickKeyEditor:
         for function in functions:
             func_name = function['name']
             func_code = function['code']
-            for i, line in enumerate(top_window):
+            for x, line in enumerate(top_window):
                 if func_name in line and line.strip().startswith("def"):
-                    insert_pos = i + 1
-                    commented_code = [f"# {line}" for line in func_code.split('\n')]
+                    indent_level = len(line) - len(line.lstrip())
+                    indent = ' ' * indent_level
+                    insert_pos = x
+                    commented_code = [f"{indent}''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] "] + [indent + line for line in func_code.split('\n')] + [f"{indent}'''"]
                     self.windows[0]["text"] = (
                         top_window[:insert_pos] +
                         commented_code +
@@ -668,7 +690,7 @@ class AIQuickKeyEditor:
                 current_window["line_num"] = len(current_window["text"]) - 1
             self.adjust_window_offset()
     def handle_sigint(self, sig, frame):
-        self.stdscr.addstr(37, 0, "Ctrl-C, are you sure you want to exit? (Y/n):", curses.A_REVERSE | curses.A_BOLD)
+        self.stdscr.addstr(37, 0, "Ctrl-C, are you sure you want to exit? (Y/n), save your qk edit, beforehand:", curses.A_REVERSE | curses.A_BOLD)
         self.stdscr.refresh()
         while True:
             ch = self.stdscr.getch()
@@ -739,12 +761,12 @@ class AIQuickKeyEditor:
             "Use the arrow keys to navigate.",
             "",
             "Try:",
-            "Crtl-A to switch to the AI command window,",
+            #"Crtl-A to switch to the AI command window,",
             "Type: 'Print the Fibonacci series.'",
-            "Crtl-V to change voice to Spelling.",
+            "Crtl-V to change viewpoint to Spelling.",
             "Depress the \\ key to fix spelling inline, in the AI command window,",
             "Be sure to Ctrl-A back to the editor window,",
-            "Crtl-V to change to Python Coder.",
+            "Crtl-V to change viewpoint to Python Coder.",
             "Press the \\ key to send your request to AI.",
             "",
             "Enjoy your AI-Assisted text and code writing experience!"
@@ -767,7 +789,4 @@ def main(stdscr):
     editor.run()
 if __name__ == "__main__":
     curses.wrapper(main)
-
-
-
 
