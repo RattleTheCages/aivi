@@ -235,6 +235,7 @@ class AIQuickKeyEditor:
             7: self.handle_ctrl_g,
             14: self.handle_ctrl_n,
             #21: self.handle_ctrl_u
+            5: self.handle_ctrl_e,  # Ctrl+E for execution
             #43: self.increase_top_window_size,
             #45: self.decrease_top_window_size,
         }
@@ -720,6 +721,18 @@ class AIQuickKeyEditor:
             self.mode = 'commd'
         else:
             self.mode = 'edit'
+    def handle_ctrl_e(self):
+        self.stdscr.nodelay(True)
+        try:
+            ch = self.stdscr.getch()
+            while ch != -1:
+                ch = self.stdscr.getch()
+        finally:
+            self.stdscr.nodelay(False)
+        self.status = "execu"
+        self.display()
+        os.system(f"bash -c 'python {self.context.original_filename}'")
+        self.display()
     def handle_ctrl_t(self):
         self.status = "Ctrlt"
         self.display()
@@ -792,5 +805,7 @@ def main(stdscr):
     editor.run()
 if __name__ == "__main__":
     curses.wrapper(main)
+
+
 
 
