@@ -21,16 +21,15 @@ client = OpenAI(api_key=os.environ.get("CUSTOM_ENV_NAME"))
 
 class CogEngine:
     def __init__(self, cognalities, session_name_with_suffix):
-        if session_name_with_suffix is None:
-            session_name_with_suffix = 'quickAi.txt'
         self.original_filename = session_name_with_suffix
         self.session_name, self.session_suffix = os.path.splitext(session_name_with_suffix)
         self.rev_num = self.find_latest_rev_num()
         self.cognalities = cognalities
         self.cogessages = []
         self.usermsg = []
-        self.cog_filename = f'{self.session_name}.cog.{self.rev_num}{self.session_suffix}'
+        self.cog_filename = f'{self.session_name}.{self.rev_num}.cog'
         self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
+        self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
     def find_latest_rev_num(self):
         files = os.listdir('.')
         pattern = re.compile(rf'{re.escape(self.session_name)}\.(\d+){re.escape(self.session_suffix)}')
@@ -82,9 +81,9 @@ class CogEngine:
         functions = []
         current_class = None
         for match in matches:
-            if match.group(1):  # Found a class
+            if match.group(1):
                 current_class = match.group(1)
-            else:  # Found a function
+            else:
                 func_name = match.group(2)
                 start_pos = match.start()
                 lines = content[start_pos:].splitlines()
@@ -103,7 +102,7 @@ class CogEngine:
                     'object': current_class,
                     'code': '\n'.join(code_block)
                 })
-        with open("debug_info.txt", "w") as f:
+        with open(f"{self.session_name}.{self.rev_num}.debug", "a") as f:
             for funct in functions:
                 f.write(f"Object: {funct['object']}\n")
                 f.write(f"Function: {funct['name']}\n")
@@ -173,21 +172,17 @@ class Viewpoints:
         return self.names[self.current_index]
     def get_attributes(self):
         return self.cognalities[self.get_current_name()]['attributes']
-    def get_current_name(self):
-        return self.names[self.current_index]
-    def get_attributes(self):
-        return self.cognalities[self.get_current_name()]['attributes']
-    def next_cognality(self):
-        self.current_index = (self.current_index + 1) % len(self.names)
-        return self.get_current_name()
-    def get_attributes_by_name(self, name):
-        return self.cognalities.get(name, {}).get('attributes', [])
     def get_model(self):
         return self.cognalities[self.get_current_name()]['model']
     def get_maxtokens(self):
         return self.cognalities[self.get_current_name()]['max_tokens']
     def get_textops(self):
         return self.cognalities[self.get_current_name()]['textops']
+    def next_cognality(self):
+        self.current_index = (self.current_index + 1) % len(self.names)
+        return self.get_current_name()
+    def get_attributes_by_name(self, name):
+        return self.cognalities.get(name, {}).get('attributes', [])
 
 class AIQuickKeyEditor:
     def __init__(self, stdscr):
@@ -207,8 +202,9 @@ class AIQuickKeyEditor:
             {"line_num": 0, "col_num": 0, "text": [""]},
         ]
         self.window_offsets = [0, 0]
-        self.top_window_size = 38
-        self.bottom_window_size = 10
+        self.screen_height, self.screen_width = self.stdscr.getmaxyx()
+        self.bottom_window_size = 16
+        self.top_window_size = self.screen_height - self.bottom_window_size
         self.cognalities = Viewpoints()
         self.personalchoice = self.cognalities.get_current_name()
         self.context = CogEngine(self.cognalities, args.session)
@@ -420,9 +416,8 @@ class AIQuickKeyEditor:
         self.context.save_cogtext()
         self.write_file()
         self.clipboard = [line for line in self.windows[self.context_window]["text"]]
-        ctx_filename = f"{self.context.get_editfilename()}.ctx"
-        with open(ctx_filename, 'a') as f:
-            f.write(f"{self.cognalities.get_current_name()}>\n")
+        with open(self.context.ctx_filename, 'a') as f:
+            f.write(f"[{self.cognalities.get_current_name()}][Query]\n")
             for line in self.windows[1]["text"]:
                 if line.strip():
                     f.write(line + '\n')
@@ -437,7 +432,8 @@ class AIQuickKeyEditor:
         self.context.add_cogtext("assistant", completion.choices[0].message.content)
         self.context.save_cogtext()
         response_text = completion.choices[0].message.content.split('\n')
-        with open(ctx_filename, 'a') as f:
+        with open(self.context.ctx_filename, 'a') as f:
+            f.write(f"[{self.cognalities.get_current_name()}][Reply]\n")
             for line in response_text:
                 if line.strip():
                     f.write(line + '\n')
@@ -474,22 +470,29 @@ class AIQuickKeyEditor:
             self.stdscr.nodelay(False)
         self.adjust_window_offset()
     def add_functions_to_edit_window(self, functions):
-        top_window = self.windows[0]["text"]
-        for function in functions:
-            func_name = function['name']
-            func_code = function['code']
-            for x, line in enumerate(top_window):
-                if func_name in line and line.strip().startswith("def"):
-                    indent_level = len(line) - len(line.lstrip())
-                    indent = ' ' * indent_level
-                    insert_pos = x
-                    commented_code = [f"{indent}''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] "] + [indent + line for line in func_code.split('\n')] + [f"{indent}'''"]
-                    self.windows[0]["text"] = (
-                        top_window[:insert_pos] +
-                        commented_code +
-                        top_window[insert_pos:]
-                    )
-                    break
+            top_window = self.windows[0]["text"]
+            for function in functions:
+                func_name = function['name']
+                func_code = function['code']
+                object_name = function.get('object', None)
+                matched_class = None
+                insert_pos = None
+                for x, line in enumerate(top_window):
+                    if object_name and line.strip().startswith(f"class {object_name}"):
+                        matched_class = object_name
+                    if matched_class == object_name and func_name in line and line.strip().startswith("def"):
+                        indent_level = len(line) - len(line.lstrip())
+                        indent = ' ' * indent_level
+                        insert_pos = x + 1
+                        commented_code = [f"{indent}''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] "] + [indent + line for line in func_code.split('\n')] + [f"{indent}'''"]
+                        self.windows[0]["text"] = (
+                            top_window[:insert_pos] +
+                            commented_code +
+                            top_window[insert_pos:]
+                        )
+                        break
+                if insert_pos is None and not object_name:
+                    self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
     def write_file(self):
         try:
             edit_filename = self.context.get_editfilename()
@@ -503,11 +506,11 @@ class AIQuickKeyEditor:
             with open(self.context.original_filename, 'w') as f:
                 for line in self.windows[0]["text"]:
                     f.write(line + '\n')
-            ctx_filename = f"{self.context.get_editfilename()}.ctx"
-            with open(ctx_filename, 'w') as f:
+            with open(self.context.ctx_filename, 'a') as f:
+                f.write(f"[{self.cognalities.get_current_name()}][Write]\n")
                 for line in self.windows[1]["text"]:
-                    f.write(line + '\n')
-                f.write(self.cognalities.get_current_name() + '\n')
+                    if line.strip():
+                        f.write(line + '\n')
             self.status = "wrote"
         except Exception as e:
             self.status = "no wr"
@@ -789,4 +792,5 @@ def main(stdscr):
     editor.run()
 if __name__ == "__main__":
     curses.wrapper(main)
+
 
