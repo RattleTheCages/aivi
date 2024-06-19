@@ -27,7 +27,7 @@ class CogEngine:
         self.cognalities = cognalities
         self.cogessages = []
         self.usermsg = []
-        self.cog_filename = f'{self.session_name}.{self.rev_num}.cog'
+        self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
         self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
         self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
     def find_latest_rev_num(self):
@@ -42,9 +42,11 @@ class CogEngine:
         return max_rev
     def get_editfilename(self):
         return self.edit_filename
-    def reset(self):
+    def reset(self, viewpoint):
         self.cogessages = []
         self.usermsg = []
+        for attribute in viewpoint.get_attributes():
+            self.add_cogtext("system", attribute)
     def add_cogtext(self, role, content):
         self.cogessages.append({"role": role, "content": content})
     def add_cogatt(self, name, role, content):
@@ -61,53 +63,65 @@ class CogEngine:
         return context
     def add_usermsg(self, msg):
         self.usermsg.append(msg)
+    def ai_query(self, viewpoint):
+        reform = client.chat.completions.create(
+            model = viewpoint.get_model(),
+            max_tokens = viewpoint.get_maxtokens(),
+            messages = self.get_cogtext()
+        )
+        self.add_cogtext("assistant", reform.choices[0].message.content)
+        return reform
     def save_cogtext(self):
-        with open(self.cog_filename, 'w') as f:
+        with open(self.cog_filename, 'w') as cogf:
             json.dump({
                 "model": self.cognalities.get_model(),
                 "max_tokens": self.cognalities.get_maxtokens(),
                 "messages": self.get_cogtext()
-            }, f)
+            }, cogf)
     def load_cogtext(self):
         if os.path.exists(cog.filename):
-            with open(cog.filename, 'r') as f:
-                data = json.load(f)
+            with open(cog.filename, 'r') as cogf:
+                data = json.load(cogf)
                 self.cognalities.model = data.get('model', '')
                 self.cognalities.max_tokens = data.get('max_tokens', 0)
                 self.cogessages = [{"role": item['role'], "content": item['content']} for item in data.get('messages', [])]
-    def extract_functions(self, content):
-        function_pattern = re.compile(r'class\s+(\w+)|def\s+(\w+)\s*\((.*?)\):')
-        matches = function_pattern.finditer(content)
-        functions = []
-        current_class = None
-        for match in matches:
-            if match.group(1):
-                current_class = match.group(1)
-            else:
-                func_name = match.group(2)
-                start_pos = match.start()
-                lines = content[start_pos:].splitlines()
-                code_block = []
-                indent_level = None
-                for line in lines:
-                    stripped_line = line.lstrip()
-                    if stripped_line and indent_level is None:
-                        indent_level = len(line) - len(stripped_line)
-                    if indent_level is not None:
-                        if len(line) - len(stripped_line) < indent_level and stripped_line:
+    def extract_objects(self, content):
+            function_pattern = re.compile(r'class\s+(\w+)|def\s+(\w+)\s*\((.*?)\):')
+            matches = function_pattern.finditer(content)
+            functions = []
+            current_class = None
+            for match in matches:
+                if match.group(1):
+                    current_class = match.group(1)
+                else:
+                    func_name = match.group(2)
+                    start_pos = match.start()
+                    lines = content[start_pos:].splitlines()
+                    code_block = []
+                    indent_level = None
+                    for line in lines:
+                        stripped_line = line.lstrip()
+                        if stripped_line.startswith('def') and code_block:
                             break
-                        code_block.append(line)
-                functions.append({
-                    'name': func_name,
-                    'object': current_class,
-                    'code': '\n'.join(code_block)
-                })
-        with open(f"{self.session_name}.{self.rev_num}.debug", "a") as f:
-            for funct in functions:
-                f.write(f"Object: {funct['object']}\n")
-                f.write(f"Function: {funct['name']}\n")
-                f.write(f"Code:\n{funct['code']}\n\n")
-        return functions
+                        if stripped_line.startswith('class') and code_block:
+                            break
+                        if stripped_line and indent_level is None:
+                            indent_level = len(line) - len(stripped_line)
+                        if indent_level is not None:
+                            if len(line) - len(stripped_line) < indent_level and stripped_line:
+                                break
+                            code_block.append(line)
+                    functions.append({
+                        'name': func_name,
+                        'object': current_class,
+                        'code': '\n'.join(code_block)
+                    })
+            with open(f"{self.session_name}.{self.rev_num}.debug", "a") as f:
+                for funct in functions:
+                    f.write(f"Object: {funct['object']}\n")
+                    f.write(f"Function: {funct['name']}\n")
+                    f.write(f"Code:\n{funct['code']}\n\n")
+            return functions
 
 class Viewpoints:
     def __init__(self):
@@ -382,11 +396,8 @@ class AIQuickKeyEditor:
             current_window["col_num"] -= 1
         self.mode = 'edit'
     def handle_backslash(self):
-        self.context.reset()
-        chosen_attributes = self.cognalities.get_attributes()
+        self.context.reset(self.cognalities)
         textops = self.cognalities.get_textops()
-        for attribute in chosen_attributes:
-            self.context.add_cogtext("system", attribute)
         if self.context_window == 1:
             if textops['inline']:
                 current_line_number = self.windows[self.context_window]["line_num"]
@@ -416,32 +427,27 @@ class AIQuickKeyEditor:
                 self.context.add_cogtext("user", userlines)
         self.context.save_cogtext()
         self.write_file()
-        self.clipboard = [line for line in self.windows[self.context_window]["text"]]
-        with open(self.context.ctx_filename, 'a') as f:
-            f.write(f"[{self.cognalities.get_current_name()}][Query]\n")
+        with open(self.context.ctx_filename, 'a') as ctxf:
+            ctxf.write(f"[{self.cognalities.get_current_name()}][Query]\n")
             for line in self.windows[1]["text"]:
                 if line.strip():
-                    f.write(line + '\n')
+                    ctxf.write(line + '\n')
+        self.clipboard = [line for line in self.windows[self.context_window]["text"]]
         # I am a fluffy unicorn, with light green spots.
         self.status = 'ai *'
         self.display()
-        completion = client.chat.completions.create(
-            model=self.cognalities.get_model(),
-            max_tokens=self.cognalities.get_maxtokens(),
-            messages=self.context.get_cogtext()
-        )
-        self.context.add_cogtext("assistant", completion.choices[0].message.content)
+        ai_revise = self.context.ai_query(self.cognalities)
         self.context.save_cogtext()
-        response_text = completion.choices[0].message.content.split('\n')
-        with open(self.context.ctx_filename, 'a') as f:
-            f.write(f"[{self.cognalities.get_current_name()}][Reply]\n")
+        response_text = ai_revise.choices[0].message.content.split('\n')
+        with open(self.context.ctx_filename, 'a') as ctxf:
+            ctxf.write(f"[{self.cognalities.get_current_name()}][Reply]\n")
             for line in response_text:
                 if line.strip():
-                    f.write(line + '\n')
+                    ctxf.write(line + '\n')
         textops = self.cognalities.get_textops()
         if textops['coder']:
-            #aicode = self.context.extract_AI_code(completion.choices[0].message.content)
-            func = self.context.extract_functions(completion.choices[0].message.content)
+            #aicode = self.context.extract_AI_code(ai_revise.choices[0].message.content)
+            func = self.context.extract_objects(ai_revise.choices[0].message.content)
             for funct in func:
                 self.windows[1]["text"].extend({funct['name']})
             self.add_functions_to_edit_window(func)
@@ -507,11 +513,11 @@ class AIQuickKeyEditor:
             with open(self.context.original_filename, 'w') as f:
                 for line in self.windows[0]["text"]:
                     f.write(line + '\n')
-            with open(self.context.ctx_filename, 'a') as f:
-                f.write(f"[{self.cognalities.get_current_name()}][Write]\n")
+            with open(self.context.ctx_filename, 'a') as ctxf:
+                ctxf.write(f"[{self.cognalities.get_current_name()}][Write]\n")
                 for line in self.windows[1]["text"]:
                     if line.strip():
-                        f.write(line + '\n')
+                        ctxf.write(line + '\n')
             self.status = "wrote"
         except Exception as e:
             self.status = "no wr"
@@ -600,7 +606,7 @@ class AIQuickKeyEditor:
         else:
             self.insert_char(ord('\\'))
     def handle_ctrl_v(self):
-        self.context.reset()
+        self.context.reset(self.cognalities)
         self.context.get_cogtext_by_name(self.cognalities.next_cognality())
         self.adjust_window_offset()
         self.display()
@@ -784,6 +790,7 @@ class AIQuickKeyEditor:
             "Be sure to Ctrl-A back to the editor window,",
             "Crtl-V to change viewpoint to Python Coder.",
             "Press the \\ key to send your request to AI.",
+            "Crtl-E to execute your code.",
             "",
             "Enjoy your AI-Assisted text and code writing experience!"
         ]
@@ -803,9 +810,7 @@ class AIQuickKeyEditor:
 def main(stdscr):
     editor = AIQuickKeyEditor(stdscr)
     editor.run()
+
 if __name__ == "__main__":
     curses.wrapper(main)
-
-
-
 
