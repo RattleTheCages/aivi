@@ -246,6 +246,7 @@ class AIQuickKeyEditor:
         self.yank_mode_active = 'off'
         self.del_lines = set()
         self.context_window = 1
+        self.show_left_column = True
         self.search_results = []
         self.current_search_result = -1
         self.windows = [
@@ -266,6 +267,8 @@ class AIQuickKeyEditor:
             curses.KEY_RIGHT: self.handle_right_arrow,
             curses.KEY_LEFT: self.handle_left_arrow,
             curses.KEY_DC: self.handle_del_key,
+            curses.KEY_END: self.handle_end_key,
+            curses.KEY_HOME: self.handle_home_key,
             ord('\\'): self.handle_backslash,
             ord('\n'): self.handle_return,
             curses.KEY_BACKSPACE: lambda: self.handle_backspace(curses.KEY_BACKSPACE),
@@ -287,7 +290,8 @@ class AIQuickKeyEditor:
             7: self.handle_ctrl_g,
             14: self.handle_ctrl_n,
             #21: self.handle_ctrl_u
-            5: self.handle_ctrl_e,  # Ctrl+E for execution
+            5: self.handle_ctrl_e,
+            17: self.handle_ctrl_q
             #43: self.increase_top_window_size,
             #45: self.decrease_top_window_size,
         }
@@ -317,17 +321,22 @@ class AIQuickKeyEditor:
             line = top_window[y + self.window_offsets[0]]
             highlight = curses.A_UNDERLINE if self.context_window == 0 and y + self.window_offsets[0] in self.yanked_lines else curses.A_NORMAL
             try:
-                self.stdscr.addstr(y, 0, f"{((y + self.window_offsets[0]+1)%1000):03}<{modeOrStatus:5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]) else 0))
+                if self.show_left_column:
+                    self.stdscr.addstr(y, 0, f"{((y + self.window_offsets[0]+1)%1000):03}<{modeOrStatus:5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]) else 0))
+                    start_text_pos = len(f"{((y + self.window_offsets[0]+1)%1000):03}<{modeOrStatus:5}>")
+                else:
+                    start_text_pos = 0
+                
                 if self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[0]["col_num"]:
-                            self.stdscr.addch(ch, curses.A_REVERSE | curses.A_NORMAL)
+                            self.stdscr.addch(y, start_text_pos + x, ch, curses.A_REVERSE | curses.A_NORMAL)
                         else:
-                            self.stdscr.addch(ch, curses.A_BOLD)
+                            self.stdscr.addch(y, start_text_pos + x, ch, curses.A_BOLD)
                     if self.context_window == 0:
-                        self.stdscr.move(y, self.windows[0]["col_num"] + len(f"{y + self.window_offsets[0]:03}<{modeOrStatus:5}>"))
+                        self.stdscr.move(y, start_text_pos + self.windows[0]["col_num"])
                 else:
-                    self.stdscr.addstr(line)
+                    self.stdscr.addstr(y, start_text_pos, line)
             except curses.error:
                 pass
         for y in range(self.top_window_size, self.top_window_size + self.bottom_window_size):
@@ -336,17 +345,21 @@ class AIQuickKeyEditor:
             highlight = curses.A_UNDERLINE if self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] in self.yanked_lines else curses.A_NORMAL
             line = bottom_window[y - self.top_window_size + self.window_offsets[1]]
             try:
-                self.stdscr.addstr(y, 0, f"{((y - self.top_window_size + self.window_offsets[1]+1)%1000):03}<{self.cognalities.get_current_name():5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] == self.windows[1]["line_num"]) else 0))
+                if self.show_left_column:
+                    self.stdscr.addstr(y, 0, f"{((y - self.top_window_size + self.window_offsets[1]+1)%1000):03}<{self.cognalities.get_current_name():5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] == self.windows[1]["line_num"]) else 0))
+                    start_text_pos = len(f"{((y - self.top_window_size + self.window_offsets[1]+1)%1000):03}<{self.cognalities.get_current_name():5}>")
+                else:
+                    start_text_pos = 0
                 if self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] == self.windows[1]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[1]["col_num"]:
-                            self.stdscr.addch(ch, curses.A_REVERSE | curses.A_NORMAL)
+                            self.stdscr.addch(y, start_text_pos + x, ch, curses.A_REVERSE | curses.A_NORMAL)
                         else:
-                            self.stdscr.addch(ch, curses.A_BOLD)
+                            self.stdscr.addch(y, start_text_pos + x, ch, curses.A_BOLD)
                     if self.context_window == 1:
-                        self.stdscr.move(y, self.windows[1]["col_num"] + len(f"{y - self.top_window_size + self.window_offsets[1]:03}<{self.personalchoice:5}>"))
+                        self.stdscr.move(y, start_text_pos + self.windows[1]["col_num"])
                 else:
-                    self.stdscr.addstr(line)
+                    self.stdscr.addstr(y, start_text_pos, line)
             except curses.error:
                 pass
         self.stdscr.refresh()
@@ -720,7 +733,7 @@ class AIQuickKeyEditor:
                 current_window["line_num"] = len(current_window["text"]) - 1
             self.adjust_window_offset()
     def handle_sigint(self, sig, frame):
-        self.stdscr.addstr(37, 0, "Ctrl-C, are you sure you want to exit? (Y/n), save your qk edit, beforehand:", curses.A_REVERSE | curses.A_BOLD)
+        self.stdscr.addstr(38, 0, "Ctrl-C, are you sure you want to exit? (Y/n/W), save your qk edit, beforehand:", curses.A_REVERSE | curses.A_BOLD)
         self.stdscr.refresh()
         while True:
             ch = self.stdscr.getch()
@@ -729,6 +742,9 @@ class AIQuickKeyEditor:
             elif ch == ord('n') or ch == ord('N'):
                 self.display()
                 return
+            elif ch == ord('W') or ch == ord('w'):
+                self.write_file()
+                raise SystemExit
     def handle_sigtstp(self, sig, frame):
         self.status = 'pause'
         self.display()
@@ -741,6 +757,14 @@ class AIQuickKeyEditor:
             next_line = current_window["text"].pop(current_window["line_num"] + 1)
             current_window["text"][current_window["line_num"]] += next_line
         self.adjust_window_offset()
+    def handle_home_key(self):
+        current_window = self.windows[self.context_window]
+        current_window["col_num"] = 0
+        self.mode = 'edit'
+    def handle_end_key(self):
+        current_window = self.windows[self.context_window]
+        current_window["col_num"] = len(current_window["text"][current_window["line_num"]])
+        self.mode = 'edit'
     def handle_ctrl_a(self):
         self.context_window = 1 - self.context_window
         if self.context_window == 1:
@@ -763,13 +787,16 @@ class AIQuickKeyEditor:
         self.status = "Ctrlt"
         self.display()
     def handle_ctrl_m(self):
-        self.mode = "not captured"
+        self.mode = "not captured ctrl-m"
+    def handle_ctrl_q(self):
+        self.mode = "not captured ctrl-q"
     def handle_ctrl_h(self):
         self.status = "CtrlH"
         self.display()
     def handle_ctrl_g(self):
-        self.status = "CtrlG"
-        self.display()
+            self.show_left_column = not self.show_left_column
+            self.status = "bell"
+            self.display()
     def run(self):
         while True:
             self.display()
@@ -833,5 +860,4 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
-
 
