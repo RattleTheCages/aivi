@@ -20,28 +20,11 @@ args = parser.parse_args()
 client = OpenAI(api_key=os.environ.get("CUSTOM_ENV_NAME"))
 
 class CogEngine:
-    def __init__(self, cognalities, session_name_with_suffix):
-        self.original_filename = session_name_with_suffix
-        self.session_name, self.session_suffix = os.path.splitext(session_name_with_suffix)
-        self.rev_num = self.find_latest_rev_num()
+    def __init__(self, cognalities, edit_session):
         self.cognalities = cognalities
         self.cogessages = []
         self.usermsg = []
-        self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
-        self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
-        self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
-    def find_latest_rev_num(self):
-        files = os.listdir('.')
-        pattern = re.compile(rf'{re.escape(self.session_name)}\.(\d+){re.escape(self.session_suffix)}')
-        max_rev = 0
-        for file in files:
-            match = pattern.match(file)
-            if match:
-                rev_num = int(match.group(1))
-                max_rev = max(max_rev, rev_num)
-        return max_rev
-    def get_editfilename(self):
-        return self.edit_filename
+        self.edit_session = edit_session
     def reset(self, viewpoint):
         self.cogessages = []
         self.usermsg = []
@@ -72,19 +55,12 @@ class CogEngine:
         self.add_cogtext("assistant", reform.choices[0].message.content)
         return reform
     def save_cogtext(self):
-        with open(self.cog_filename, 'w') as cogf:
+        with open(self.edit_session.cog_filename, 'w') as cogf:
             json.dump({
                 "model": self.cognalities.get_model(),
                 "max_tokens": self.cognalities.get_maxtokens(),
                 "messages": self.get_cogtext()
             }, cogf)
-    def load_cogtext(self):
-        if os.path.exists(cog.filename):
-            with open(cog.filename, 'r') as cogf:
-                data = json.load(cogf)
-                self.cognalities.model = data.get('model', '')
-                self.cognalities.max_tokens = data.get('max_tokens', 0)
-                self.cogessages = [{"role": item['role'], "content": item['content']} for item in data.get('messages', [])]
     def extract_objects(self, content):
             function_pattern = re.compile(r'class\s+(\w+)|def\s+(\w+)\s*\((.*?)\):')
             matches = function_pattern.finditer(content)
@@ -116,7 +92,7 @@ class CogEngine:
                         'object': current_class,
                         'code': '\n'.join(code_block)
                     })
-            with open(f"{self.session_name}.{self.rev_num}.debug", "a") as f:
+            with open(f"{self.edit_session.session_name}.{self.edit_session.rev_num}.debug", "a") as f:
                 for funct in functions:
                     f.write(f"Object: {funct['object']}\n")
                     f.write(f"Function: {funct['name']}\n")
@@ -198,6 +174,67 @@ class Viewpoints:
     def get_attributes_by_name(self, name):
         return self.cognalities.get(name, {}).get('attributes', [])
 
+class EditRevisionManager:
+    def __init__(self, session_name_with_suffix):
+        self.revisions = {}
+        self.original_filename = session_name_with_suffix
+        self.session_name, self.session_suffix = os.path.splitext(session_name_with_suffix)
+        self.rev_num = self.find_latest_file_rev_num() + 1
+        self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
+        self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
+        self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
+    def store_revision(self, rev_num, text):
+        self.revisions[rev_num] = list(text)  # Making a copy of the list
+    def get_revision(self, rev_num):
+        return self.revisions.get(rev_num, [])
+    def get_latest_revision(self):
+        if self.revisions:
+            max_rev_num = max(self.revisions.keys())
+            return self.revisions[max_rev_num]
+        return []
+        self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
+        self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
+        self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
+    def find_latest_file_rev_num(self):
+            files = os.listdir('.')
+            suffixes = [self.session_suffix, '.cog.json', '.ctx']
+            pattern = re.compile(rf'{re.escape(self.session_name)}\.(\d+)(?:{re.escape(self.session_suffix)}|\.cog\.json|\.ctx)')
+            max_rev = 0
+            for file in files:
+                for suffix in suffixes:
+                    if file.endswith(suffix):
+                        match = re.match(rf'{re.escape(self.session_name)}\.(\d+)', file)
+                        if match:
+                            rev_num = int(match.group(1))
+                            max_rev = max(max_rev, rev_num)
+            return max_rev
+    def increment_rev(self):
+        self.rev_num = self.find_latest_file_rev_num() + 1
+        self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
+        self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
+        self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
+    def write_file(self, edit_window_content, command_window_content):
+        self.increment_rev()
+        self.store_revision(self.rev_num, edit_window_content)
+        if os.path.exists(self.original_filename):
+            os.rename(self.original_filename, self.edit_filename + ".org")
+        try:
+            with open(self.original_filename, 'w') as og:
+                for line in edit_window_content:
+                    og.write(line + '\n')
+            with open(self.edit_filename, 'w') as f:
+                for line in edit_window_content:
+                    f.write(line + '\n')
+            with open(context.ctx_filename, 'a') as ctxf:
+                ctxf.write(f"[{context.cognalities.get_current_name()}][Write]\n")
+                for line in command_window_content:
+                    if line.strip():
+                        ctxf.write(line + '\n')
+        except Exception as e:
+            return "no wr"
+        finally:
+            return "wrote"
+
 class AIQuickKeyEditor:
     def __init__(self, stdscr):
         signal.signal(signal.SIGINT, self.handle_sigint)
@@ -221,7 +258,8 @@ class AIQuickKeyEditor:
         self.top_window_size = self.screen_height - self.bottom_window_size
         self.cognalities = Viewpoints()
         self.personalchoice = self.cognalities.get_current_name()
-        self.context = CogEngine(self.cognalities, args.session)
+        self.revision_manager = EditRevisionManager(args.session)
+        self.context = CogEngine(self.cognalities, self.revision_manager)
         self.keymap = {
             curses.KEY_UP: self.handle_up_arrow,
             curses.KEY_DOWN: self.handle_down_arrow,
@@ -427,7 +465,7 @@ class AIQuickKeyEditor:
                 self.context.add_cogtext("user", userlines)
         self.context.save_cogtext()
         self.write_file()
-        with open(self.context.ctx_filename, 'a') as ctxf:
+        with open(self.revision_manager.ctx_filename, 'a') as ctxf:
             ctxf.write(f"[{self.cognalities.get_current_name()}][Query]\n")
             for line in self.windows[1]["text"]:
                 if line.strip():
@@ -439,11 +477,12 @@ class AIQuickKeyEditor:
         ai_revise = self.context.ai_query(self.cognalities)
         self.context.save_cogtext()
         response_text = ai_revise.choices[0].message.content.split('\n')
-        with open(self.context.ctx_filename, 'a') as ctxf:
-            ctxf.write(f"[{self.cognalities.get_current_name()}][Reply]\n")
-            for line in response_text:
-                if line.strip():
-                    ctxf.write(line + '\n')
+        if textops['inline']:
+            with open(self.revision_manager.ctx_filename, 'a') as ctxf:
+                ctxf.write(f"[{self.cognalities.get_current_name()}][Reply]\n")
+                for line in response_text:
+                    if line.strip():
+                        ctxf.write(line + '\n')
         textops = self.cognalities.get_textops()
         if textops['coder']:
             #aicode = self.context.extract_AI_code(ai_revise.choices[0].message.content)
@@ -501,26 +540,7 @@ class AIQuickKeyEditor:
                 if insert_pos is None and not object_name:
                     self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
     def write_file(self):
-        try:
-            edit_filename = self.context.get_editfilename()
-            if os.path.exists(edit_filename):
-                new_rev_num = self.context.find_latest_rev_num() + 1
-                new_filename = f"{self.context.session_name}.{new_rev_num}{self.context.session_suffix}"
-                os.rename(edit_filename, new_filename)
-            with open(edit_filename, 'w') as f:
-                for line in self.windows[0]["text"]:
-                    f.write(line + '\n')
-            with open(self.context.original_filename, 'w') as f:
-                for line in self.windows[0]["text"]:
-                    f.write(line + '\n')
-            with open(self.context.ctx_filename, 'a') as ctxf:
-                ctxf.write(f"[{self.cognalities.get_current_name()}][Write]\n")
-                for line in self.windows[1]["text"]:
-                    if line.strip():
-                        ctxf.write(line + '\n')
-            self.status = "wrote"
-        except Exception as e:
-            self.status = "no wr"
+        self.status = self.revision_manager.write_file(self.windows[0]["text"], self.windows[1]["text"])
     def read_file(self, filename):
         try:
             with open(filename, 'r') as f:
@@ -813,4 +833,5 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
+
 
