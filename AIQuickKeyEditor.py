@@ -12,6 +12,7 @@ import json
 import argparse
 import curses
 import signal
+import subprocess
 from openai import OpenAI
 
 parser = argparse.ArgumentParser()
@@ -96,7 +97,8 @@ class CogEngine:
                 for funct in functions:
                     f.write(f"Object: {funct['object']}\n")
                     f.write(f"Function: {funct['name']}\n")
-                    f.write(f"Code:\n{funct['code']}\n\n")
+                    f.write(f"Code:\n{funct['code']}\n")
+                    f.write("[{}]        [{}]        [{}]        [{}]\n\n")
             return functions
 
 class Viewpoints:
@@ -121,7 +123,8 @@ class Viewpoints:
                     'You are very competent and good at writing code.',
                     'Besure to write the entire function when there are any modification to that function.',
                     'When the code is longer than 222 lines, only write the modified functions; ',
-                    'and indent so the modified functions can be dropped into the appropriate positions'
+                    'and indent so the modified functions can be dropped into the appropriate positions',
+                    'Besure to write the class or object the modified function belongs to.'
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
@@ -151,8 +154,8 @@ class Viewpoints:
                 'attributes': [
                     "This is the children's game of 'telephone', play nicely."
                 ],
-                'model': 'gpt-4o',
-                'max_tokens': 698,
+                'model': 'gpt-3.5-turbo',
+                'max_tokens': 298,
                 'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
             }
         }
@@ -177,14 +180,16 @@ class Viewpoints:
 class EditRevisionManager:
     def __init__(self, session_name_with_suffix):
         self.revisions = {}
+        self.subrevisions = {}
         self.original_filename = session_name_with_suffix
         self.session_name, self.session_suffix = os.path.splitext(session_name_with_suffix)
         self.rev_num = self.find_latest_file_rev_num() + 1
         self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
         self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
         self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
+        self.subrev_num = 0
     def store_revision(self, rev_num, text):
-        self.revisions[rev_num] = list(text)  # Making a copy of the list
+        self.revisions[rev_num] = list(text)
     def get_revision(self, rev_num):
         return self.revisions.get(rev_num, [])
     def get_latest_revision(self):
@@ -192,22 +197,26 @@ class EditRevisionManager:
             max_rev_num = max(self.revisions.keys())
             return self.revisions[max_rev_num]
         return []
-        self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
-        self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
-        self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
+    def store_subrevision(self, subrev_text):
+        self.subrev_num += 1
+        self.subrevisions[self.subrev_num] = list(subrev_text)
+        subrev_filename = f'{self.session_name}.{self.rev_num}.{self.subrev_num}.subrev'
+        with open(subrev_filename, 'w') as f:
+            for line in subrev_text:
+                f.write(line + '\n')
     def find_latest_file_rev_num(self):
-            files = os.listdir('.')
-            suffixes = [self.session_suffix, '.cog.json', '.ctx']
-            pattern = re.compile(rf'{re.escape(self.session_name)}\.(\d+)(?:{re.escape(self.session_suffix)}|\.cog\.json|\.ctx)')
-            max_rev = 0
-            for file in files:
-                for suffix in suffixes:
-                    if file.endswith(suffix):
-                        match = re.match(rf'{re.escape(self.session_name)}\.(\d+)', file)
-                        if match:
-                            rev_num = int(match.group(1))
-                            max_rev = max(max_rev, rev_num)
-            return max_rev
+        files = os.listdir('.')
+        suffixes = [self.session_suffix, '.cog.json', '.ctx']
+        pattern = re.compile(rf'{re.escape(self.session_name)}\.(\d+)(?:{re.escape(self.session_suffix)}|\.cog\.json|\.ctx)')
+        max_rev = 0
+        for file in files:
+            for suffix in suffixes:
+                if file.endswith(suffix):
+                    match = re.match(rf'{re.escape(self.session_name)}\.(\d+)', file)
+                    if match:
+                        rev_num = int(match.group(1))
+                        max_rev = max(max_rev, rev_num)
+        return max_rev
     def increment_rev(self):
         self.rev_num = self.find_latest_file_rev_num() + 1
         self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
@@ -225,8 +234,8 @@ class EditRevisionManager:
             with open(self.edit_filename, 'w') as f:
                 for line in edit_window_content:
                     f.write(line + '\n')
-            with open(context.ctx_filename, 'a') as ctxf:
-                ctxf.write(f"[{context.cognalities.get_current_name()}][Write]\n")
+            with open(self.ctx_filename, 'a') as ctxf:
+                ctxf.write(f"[{self.cognalities.get_current_name()}][Write]\n")
                 for line in command_window_content:
                     if line.strip():
                         ctxf.write(line + '\n')
@@ -234,6 +243,16 @@ class EditRevisionManager:
             return "no wr"
         finally:
             return "wrote"
+    def read_file(self):
+        try:
+            with open(self.original_filename, 'r') as og:
+                lines = [line.rstrip('\n') for line in og]
+            return "read ", lines
+        except Exception as e:
+            if isinstance(e, PermissionError):
+                return "denid",
+            elif isinstance(e, IsADirectoryError):
+                return "dir  "
 
 class AIQuickKeyEditor:
     def __init__(self, stdscr):
@@ -326,7 +345,6 @@ class AIQuickKeyEditor:
                     start_text_pos = len(f"{((y + self.window_offsets[0]+1)%1000):03}<{modeOrStatus:5}>")
                 else:
                     start_text_pos = 0
-                
                 if self.context_window == 0 and y + self.window_offsets[0] == self.windows[0]["line_num"]:
                     for x, ch in enumerate(line):
                         if x == self.windows[0]["col_num"]:
@@ -527,6 +545,7 @@ class AIQuickKeyEditor:
                 ch = self.stdscr.getch()
         finally:
             self.stdscr.nodelay(False)
+        self.revision_manager.store_subrevision(self.windows[self.context_window]["text"])
         self.adjust_window_offset()
     def add_functions_to_edit_window(self, functions):
             top_window = self.windows[0]["text"]
@@ -555,23 +574,7 @@ class AIQuickKeyEditor:
     def write_file(self):
         self.status = self.revision_manager.write_file(self.windows[0]["text"], self.windows[1]["text"])
     def read_file(self, filename):
-        try:
-            with open(filename, 'r') as f:
-                lines = [line.rstrip('\n') for line in f]
-            self.windows[0]["text"] = lines
-            self.windows[1]["text"] = [""]
-            self.windows[0]["line_num"] = 0
-            self.windows[0]["col_num"] = 0
-            self.windows[1]["line_num"] = 0
-            self.windows[1]["col_num"] = 0
-            self.status = "read "
-            self.context.reset_request_counter()
-            self.adjust_window_offset()
-        except Exception as e:
-            if isinstance(e, PermissionError):
-                self.status = "denid"
-            elif isinstance(e, IsADirectoryError):
-                self.status = "dir  "
+        self.status, self.windows[0]["text"] = self.revision_manager.read_file()
     def delete_current_line(self):
         self.status = 'delln'
         current_window = self.windows[self.context_window]
@@ -733,11 +736,11 @@ class AIQuickKeyEditor:
                 current_window["line_num"] = len(current_window["text"]) - 1
             self.adjust_window_offset()
     def handle_sigint(self, sig, frame):
-        self.stdscr.addstr(38, 0, "Ctrl-C, are you sure you want to exit? (Y/n/W), save your qk edit, beforehand:", curses.A_REVERSE | curses.A_BOLD)
+        self.stdscr.addstr(38, 0, f'Ctrl-C, are you sure you want to exit? (Q/n/W), save your qk edit [{self.revision_manager.original_filename}], beforehand.', curses.A_REVERSE | curses.A_BOLD)
         self.stdscr.refresh()
         while True:
             ch = self.stdscr.getch()
-            if ch == ord('Y'):
+            if ch == ord('Q'):
                 raise SystemExit
             elif ch == ord('n') or ch == ord('N'):
                 self.display()
@@ -772,17 +775,26 @@ class AIQuickKeyEditor:
         else:
             self.mode = 'edit'
     def handle_ctrl_e(self):
-        self.stdscr.nodelay(True)
-        try:
-            ch = self.stdscr.getch()
-            while ch != -1:
-                ch = self.stdscr.getch()
-        finally:
-            self.stdscr.nodelay(False)
-        self.status = "execu"
-        self.display()
-        os.system(f"bash -c 'python {self.context.original_filename}'")
-        self.display()
+            self.status = "execu"
+            self.display()
+            try:
+                result = subprocess.run(
+                    ['python', self.revision_manager.original_filename],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                )
+                stdout_lines = result.stdout.split('\n')
+                stderr_lines = result.stderr.split('\n')
+                self.windows[1]['text'].append("Execution Results:")
+                self.windows[1]['text'].append("stdout:")
+                self.windows[1]['text'].extend(stdout_lines)
+                self.windows[1]['text'].append("stderr:")
+                self.windows[1]['text'].extend(stderr_lines)
+            except subprocess.CalledProcessError as e:
+                self.windows[1]['text'].append(f"Called Process Error:\n{str(e)}")
+            except Exception as e:
+                self.windows[1]['text'].append(f"Error:\n{str(e)}")
+            self.adjust_window_offset()
+            self.display()
     def handle_ctrl_t(self):
         self.status = "Ctrlt"
         self.display()
@@ -860,4 +872,5 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
+
 
