@@ -98,7 +98,6 @@ class CogEngine:
                     f.write(f"Object: {funct['object']}\n")
                     f.write(f"Function: {funct['name']}\n")
                     f.write(f"Code:\n{funct['code']}\n")
-                    f.write("[{}]        [{}]        [{}]        [{}]\n\n")
             return functions
 
 class Viewpoints:
@@ -338,6 +337,7 @@ class AIQuickKeyEditor:
         self.stdscr.clear()
         for y in range(min(self.top_window_size, len(top_window) - self.window_offsets[0])):
             line = top_window[y + self.window_offsets[0]]
+            line = line[:self.screen_width]
             highlight = curses.A_UNDERLINE if self.context_window == 0 and y + self.window_offsets[0] in self.yanked_lines else curses.A_NORMAL
             try:
                 if self.show_left_column:
@@ -351,6 +351,8 @@ class AIQuickKeyEditor:
                             self.stdscr.addch(y, start_text_pos + x, ch, curses.A_REVERSE | curses.A_NORMAL)
                         else:
                             self.stdscr.addch(y, start_text_pos + x, ch, curses.A_BOLD)
+                    if self.windows[0]["col_num"] == len(line):
+                        self.stdscr.addch(y, start_text_pos + self.windows[0]["col_num"], ' ', curses.A_REVERSE | curses.A_NORMAL)
                     if self.context_window == 0:
                         self.stdscr.move(y, start_text_pos + self.windows[0]["col_num"])
                 else:
@@ -362,6 +364,7 @@ class AIQuickKeyEditor:
                 break
             highlight = curses.A_UNDERLINE if self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] in self.yanked_lines else curses.A_NORMAL
             line = bottom_window[y - self.top_window_size + self.window_offsets[1]]
+            line = line[:self.screen_width]
             try:
                 if self.show_left_column:
                     self.stdscr.addstr(y, 0, f"{((y - self.top_window_size + self.window_offsets[1]+1)%1000):03}<{self.cognalities.get_current_name():5}>", highlight | curses.A_REVERSE | (curses.A_BOLD if (self.context_window == 1 and y - self.top_window_size + self.window_offsets[1] == self.windows[1]["line_num"]) else 0))
@@ -374,6 +377,8 @@ class AIQuickKeyEditor:
                             self.stdscr.addch(y, start_text_pos + x, ch, curses.A_REVERSE | curses.A_NORMAL)
                         else:
                             self.stdscr.addch(y, start_text_pos + x, ch, curses.A_BOLD)
+                    if self.windows[1]["col_num"] == len(line):
+                        self.stdscr.addch(y, start_text_pos + self.windows[1]["col_num"], ' ', curses.A_REVERSE | curses.A_NORMAL)
                     if self.context_window == 1:
                         self.stdscr.move(y, start_text_pos + self.windows[1]["col_num"])
                 else:
@@ -569,8 +574,8 @@ class AIQuickKeyEditor:
                             top_window[insert_pos:]
                         )
                         break
-                if insert_pos is None and not object_name:
-                    self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
+                #if insert_pos is None and not object_name:
+                    #self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
     def write_file(self):
         self.status = self.revision_manager.write_file(self.windows[0]["text"], self.windows[1]["text"])
     def read_file(self, filename):
@@ -767,7 +772,7 @@ class AIQuickKeyEditor:
     def handle_end_key(self):
         current_window = self.windows[self.context_window]
         current_window["col_num"] = len(current_window["text"][current_window["line_num"]])
-        self.mode = 'edit'
+        self.mode = 'edit '
     def handle_ctrl_a(self):
         self.context_window = 1 - self.context_window
         if self.context_window == 1:
@@ -829,11 +834,11 @@ class AIQuickKeyEditor:
             "",
             "Control Characters:",
             "Ctrl-A: Switch between editor window and AI command.",
-            "Ctrl-V: Switch AI Personality, E.g. Spelling and Grammar, Python Coder.",
+            "Ctrl-V: Switch AI Viewpoint, E.g. Spelling, Grammar, Python Coder.",
             "Ctrl-W: Write the editor window to a file.",
             "Ctrl-R: Read the file to edit.",
-            "Backslash key (\\): Quick Query AI.",
-            "Backspace key (<-): Switch between the AI reply and the original, for quick comparison.",
+            "Backslash key (\\): Quick Key AI Viewpoint Query.  Just key the backslash.",
+            "Backspace key (<-): Toggle between the AI Viewpoint and the original, for quick comparison.",
             "Ctrl-D: Delete a line.",
             "Ctrl-X: Extract and mark lines (repeat Ctrl-X).",
             "Ctrl-Y: Yank (copy) the marked lines.",
@@ -843,11 +848,11 @@ class AIQuickKeyEditor:
             "",
             "Try:",
             #"Crtl-A to switch to the AI command window,",
-            "Type: 'Print the Fibonacci series.'",
+            "Type: 'Write a script that prints the Fibonacci series up to 89 inclusive.'",
             "Crtl-V to change viewpoint to Spelling.",
-            "Depress the \\ key to fix spelling inline, in the AI command window,",
-            "Be sure to Ctrl-A back to the editor window,",
+            "Depress the \\ key to fix spelling, inline, in the AI command window,",
             "Crtl-V to change viewpoint to Python Coder.",
+            "Be sure to Ctrl-A back to the editor window,",
             "Press the \\ key to send your request to AI.",
             "Crtl-E to execute your code.",
             "",
