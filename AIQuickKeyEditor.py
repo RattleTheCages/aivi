@@ -221,7 +221,7 @@ class EditRevisionManager:
         self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
         self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
         self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
-    def write_file(self, edit_window_content, command_window_content):
+    def write_file(self, viewpoint, edit_window_content, command_window_content):
         self.increment_rev()
         self.store_revision(self.rev_num, edit_window_content)
         if os.path.exists(self.original_filename):
@@ -234,10 +234,8 @@ class EditRevisionManager:
                 for line in edit_window_content:
                     f.write(line + '\n')
             with open(self.ctx_filename, 'a') as ctxf:
-                ctxf.write(f"[{self.cognalities.get_current_name()}][Write]\n")
-                for line in command_window_content:
-                    if line.strip():
-                        ctxf.write(line + '\n')
+                for line_num, line in enumerate(command_window_content, start=1):
+                    self.write_ctx_file_line(line, line_num, viewpoint, 'Write')
         except Exception as e:
             return "no wr"
         finally:
@@ -252,6 +250,9 @@ class EditRevisionManager:
                 return "denid",
             elif isinstance(e, IsADirectoryError):
                 return "dir  "
+    def write_ctx_file_line(self, line, line_num, viewpoint, action):
+            with open(self.ctx_filename, 'a') as ctxf:
+                ctxf.write(f"{line_num:03}<[{viewpoint.get_current_name()}][{action}]{line}\n")
 
 class AIQuickKeyEditor:
     def __init__(self, stdscr):
@@ -470,114 +471,106 @@ class AIQuickKeyEditor:
             current_window["col_num"] -= 1
         self.mode = 'edit'
     def handle_backslash(self):
-        self.context.reset(self.cognalities)
-        textops = self.cognalities.get_textops()
-        if self.context_window == 1:
+            self.context.reset(self.cognalities)
+            textops = self.cognalities.get_textops()
+            current_line_number = self.windows[self.context_window]["line_num"]
             if textops['inline']:
-                current_line_number = self.windows[self.context_window]["line_num"]
                 user_line = self.windows[self.context_window]["text"][current_line_number].strip()
-                self.context.add_cogtext("user", user_line)
+                self.revision_manager.write_ctx_file_line(user_line, current_line_number, self.cognalities, 'Query')
             else:
-                userlines = ""
-                for line in self.windows[1]["text"]:
-                    if line.strip():
-                        userlines += line + '\n'
-                self.context.add_cogtext("user", userlines)
-        else:
+                self.write_file()
+            if self.context_window == 1:
+                if textops['inline']:
+                    user_line = self.windows[self.context_window]["text"][current_line_number].strip()
+                    self.context.add_cogtext("user", user_line)
+                else:
+                    userlines = ""
+                    for line in self.windows[1]["text"]:
+                        if line.strip():
+                            userlines += line + '\n'
+                    self.context.add_cogtext("user", userlines)
+            else:
+                if textops['inline']:
+                    user_line = self.windows[self.context_window]["text"][current_line_number].strip()
+                    self.context.add_cogtext("user", user_line)
+                else:
+                    userlines = ""
+                    for line in self.windows[1]["text"]:
+                        if line.strip():
+                            userlines += line + '\n'
+                    self.context.add_cogtext("system", userlines)
+                    userlines = ""
+                    for line in self.windows[0]["text"]:
+                        if line.strip():
+                            userlines += line + '\n'
+                    self.context.add_cogtext("user", userlines)
+            self.context.save_cogtext()
+            self.clipboard = [line for line in self.windows[self.context_window]["text"]]
+            # I am a fluffy unicorn, with light green spots.
+            self.status = 'ai *'
+            self.display()
+            ai_revise = self.context.ai_query(self.cognalities)
+            self.context.save_cogtext()
+            response_text = ai_revise.choices[0].message.content.split('\n')
             if textops['inline']:
-                current_line_number = self.windows[self.context_window]["line_num"]
-                user_line = self.windows[self.context_window]["text"][current_line_number].strip()
-                self.context.add_cogtext("user", user_line)
-            else:    
-                userlines = ""
-                for line in self.windows[1]["text"]:
-                    if line.strip():
-                        userlines += line + '\n'
-                self.context.add_cogtext("system", userlines)
-                userlines = ""
-                for line in self.windows[0]["text"]:
-                    if line.strip():
-                        userlines += line + '\n'
-                self.context.add_cogtext("user", userlines)
-        self.context.save_cogtext()
-        self.write_file()
-        with open(self.revision_manager.ctx_filename, 'a') as ctxf:
-            ctxf.write(f"[{self.cognalities.get_current_name()}][Query]\n")
-            for line in self.windows[1]["text"]:
-                if line.strip():
-                    ctxf.write(line + '\n')
-        self.clipboard = [line for line in self.windows[self.context_window]["text"]]
-        # I am a fluffy unicorn, with light green spots.
-        self.status = 'ai *'
-        self.display()
-        ai_revise = self.context.ai_query(self.cognalities)
-        self.context.save_cogtext()
-        response_text = ai_revise.choices[0].message.content.split('\n')
-        if textops['inline']:
-            with open(self.revision_manager.ctx_filename, 'a') as ctxf:
-                ctxf.write(f"[{self.cognalities.get_current_name()}][Reply]\n")
-                for line in response_text:
-                    if line.strip():
-                        ctxf.write(line + '\n')
-        textops = self.cognalities.get_textops()
-        if textops['coder']:
-            #aicode = self.context.extract_AI_code(ai_revise.choices[0].message.content)
-            func = self.context.extract_objects(ai_revise.choices[0].message.content)
-            for funct in func:
-                self.windows[1]["text"].extend({funct['name']})
-            self.add_functions_to_edit_window(func)
-        if textops['inline']:
-            self.insert_as_current_line(response_text[0])
-        if textops['replace']:
-            self.windows[self.context_window]["text"] = response_text
-        if textops['concatenate']:
-            bline = len(self.windows[self.context_window]["text"])
-            self.windows[self.context_window]["line_num"] = bline
-            self.insert_lines_at_current_line("'''")
-            self.insert_lines_at_current_line(f"[{self.cognalities.get_current_name()}][AI viewpoint][--concatenate]")
-            self.windows[self.context_window]["text"].extend(response_text)
-            self.windows[self.context_window]["text"].extend('\n')
-            self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
-            self.windows[self.context_window]["col_num"] = len(self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]])
-            self.insert_lines_at_current_line(" ")
-            self.insert_lines_at_current_line("'''")
-            self.windows[self.context_window]["line_num"] = bline
-        self.mode = 'reply'
-        self.stdscr.nodelay(True)
-        try:
-            ch = self.stdscr.getch()
-            while ch != -1:
+                self.revision_manager.write_ctx_file_line(response_text[0], current_line_number, self.cognalities, 'Reply')
+                self.insert_as_current_line(response_text[0])
+            if textops['coder']:
+                #aicode = self.context.extract_AI_code(ai_revise.choices[0].message.content)
+                func = self.context.extract_objects(ai_revise.choices[0].message.content)
+                for funct in func:
+                    self.windows[1]["text"].extend({funct['name']})
+                self.add_objects_to_edit_window(func)
+            if textops['replace']:
+                self.windows[self.context_window]["text"] = response_text
+            if textops['concatenate']:
+                bline = len(self.windows[self.context_window]["text"])
+                self.windows[self.context_window]["line_num"] = bline
+                self.insert_lines_at_current_line("'''")
+                self.insert_lines_at_current_line(f"[{self.cognalities.get_current_name()}][AI viewpoint][--concatenate]")
+                self.windows[self.context_window]["text"].extend(response_text)
+                self.windows[self.context_window]["text"].extend('\n')
+                self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
+                self.windows[self.context_window]["col_num"] = len(self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]])
+                self.insert_lines_at_current_line(" ")
+                self.insert_lines_at_current_line("'''")
+                self.windows[self.context_window]["line_num"] = bline
+            self.mode = 'reply'
+            self.stdscr.nodelay(True)
+            try:
                 ch = self.stdscr.getch()
-        finally:
-            self.stdscr.nodelay(False)
-        self.revision_manager.store_subrevision(self.windows[self.context_window]["text"])
-        self.adjust_window_offset()
-    def add_functions_to_edit_window(self, functions):
-            top_window = self.windows[0]["text"]
-            for function in functions:
-                func_name = function['name']
-                func_code = function['code']
-                object_name = function.get('object', None)
-                matched_class = None
-                insert_pos = None
-                for x, line in enumerate(top_window):
-                    if object_name and line.strip().startswith(f"class {object_name}"):
-                        matched_class = object_name
-                    if matched_class == object_name and func_name in line and line.strip().startswith("def"):
-                        indent_level = len(line) - len(line.lstrip())
-                        indent = ' ' * indent_level
-                        insert_pos = x + 1
-                        commented_code = [f"{indent}''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] "] + [indent + line for line in func_code.split('\n')] + [f"{indent}'''"]
-                        self.windows[0]["text"] = (
-                            top_window[:insert_pos] +
-                            commented_code +
-                            top_window[insert_pos:]
-                        )
-                        break
-                #if insert_pos is None and not object_name:
-                    #self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
+                while ch != -1:
+                    ch = self.stdscr.getch()
+            finally:
+                self.stdscr.nodelay(False)
+            self.revision_manager.store_subrevision(self.windows[self.context_window]["text"])
+            self.adjust_window_offset()
+    def add_objects_to_edit_window(self, objects):
+        top_window = self.windows[0]["text"]
+        for function in objects:
+            func_name = function['name']
+            func_code = function['code']
+            object_name = function.get('object', None)
+            matched_class = None
+            insert_pos = None
+            for x, line in enumerate(top_window):
+                if object_name and line.strip().startswith(f"class {object_name}"):
+                    matched_class = object_name
+                if matched_class == object_name and func_name in line and line.strip().startswith("def"):
+                    indent_level = len(line) - len(line.lstrip())
+                    indent = ' ' * indent_level
+                    insert_pos = x + 1
+                    commented_code = [f"{indent}''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] "] + [indent + line for line in func_code.split('\n')] + [f"{indent}'''"]
+                    top_window[:] = (
+                        top_window[:insert_pos] +
+                        commented_code +
+                        top_window[insert_pos:]
+                    )
+                    break
+            if insert_pos is None and not object_name:
+                self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
     def write_file(self):
-        self.status = self.revision_manager.write_file(self.windows[0]["text"], self.windows[1]["text"])
+        self.status = self.revision_manager.write_file(self.cognalities, self.windows[0]["text"], self.windows[1]["text"])
     def read_file(self, filename):
         self.status, self.windows[0]["text"] = self.revision_manager.read_file()
     def delete_current_line(self):
@@ -877,5 +870,4 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
-
 
