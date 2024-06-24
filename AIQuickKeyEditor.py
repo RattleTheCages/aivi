@@ -77,6 +77,8 @@ class CogEngine:
                     code_block = []
                     indent_level = None
                     for line in lines:
+                        if '```' in line:
+                            break
                         stripped_line = line.lstrip()
                         if stripped_line.startswith('def') and code_block:
                             break
@@ -99,7 +101,6 @@ class CogEngine:
                     f.write(f"Function: {funct['name']}\n")
                     f.write(f"Code:\n{funct['code']}\n")
             return functions
-
 class Viewpoints:
     def __init__(self):
         self.cognalities = {
@@ -113,7 +114,7 @@ class Viewpoints:
                 ],
                 'model': 'gpt-3.5-turbo',
                 'max_tokens': 298,
-                'textops': {'concatenate': False, 'replace': False, 'inline': True, 'coder': False}
+                'textops': {'concatenate': False, 'replace': False, 'inline': True, 'coder': False, 'refactor': False}
             },
             'Python Coder': {
                 'attributes': [
@@ -127,7 +128,8 @@ class Viewpoints:
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
-                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': True}
+                #'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': True, 'refactor': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': True, 'refactor': True}
             },
             'Grammar': {
                 'attributes': [
@@ -137,17 +139,16 @@ class Viewpoints:
                     'In the alternate phrasing try to offer the phrasing in a style of the original',
                     'For example, if the style is technical or professional, offer rephrasing in at the same level, or higher, of grammar and content rephrasing.',
                     'If the style is less professional your reply does not have to be as stringent.'
-                    #'If needed, rewrite the sentences at a higher education level.'
                 ],
                 'model': 'gpt-4o',
                 'max_tokens': 698,
-                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False, 'refactor': False}
             },
             'Freestyle': {
                 'attributes': [],
                 'model': 'gpt-4o',
                 'max_tokens': 4096,
-                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False, 'refactor': False}
             },
             'Telephone': {
                 'attributes': [
@@ -155,7 +156,7 @@ class Viewpoints:
                 ],
                 'model': 'gpt-3.5-turbo',
                 'max_tokens': 298,
-                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False}
+                'textops': {'concatenate': True, 'replace': False, 'inline': False, 'coder': False, 'refactor': False}
             }
         }
         self.names = list(self.cognalities.keys())
@@ -520,7 +521,7 @@ class AIQuickKeyEditor:
                 func = self.context.extract_objects(ai_revise.choices[0].message.content)
                 for funct in func:
                     self.windows[1]["text"].extend({funct['name']})
-                self.add_objects_to_edit_window(func)
+                self.add_objects_to_edit_window(func, textops)
             if textops['replace']:
                 self.windows[self.context_window]["text"] = response_text
             if textops['concatenate']:
@@ -545,30 +546,72 @@ class AIQuickKeyEditor:
                 self.stdscr.nodelay(False)
             self.revision_manager.store_subrevision(self.windows[self.context_window]["text"])
             self.adjust_window_offset()
-    def add_objects_to_edit_window(self, objects):
+    def add_objects_to_edit_window(self, objects, textops):
         top_window = self.windows[0]["text"]
-        for function in objects:
-            func_name = function['name']
-            func_code = function['code']
-            object_name = function.get('object', None)
-            matched_class = None
-            insert_pos = None
-            for x, line in enumerate(top_window):
-                if object_name and line.strip().startswith(f"class {object_name}"):
-                    matched_class = object_name
-                if matched_class == object_name and func_name in line and line.strip().startswith("def"):
-                    indent_level = len(line) - len(line.lstrip())
-                    indent = ' ' * indent_level
-                    insert_pos = x + 1
-                    commented_code = [f"{indent}''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] "] + [indent + line for line in func_code.split('\n')] + [f"{indent}'''"]
-                    top_window[:] = (
-                        top_window[:insert_pos] +
-                        commented_code +
-                        top_window[insert_pos:]
-                    )
-                    break
-            if insert_pos is None and not object_name:
-                self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
+        if textops['refactor']:
+            for function in objects:
+                func_name = function['name']
+                func_code = function['code']
+                object_name = function.get('object', None)
+                matched_class = None
+                insert_pos = None
+                end_pos = None
+                for x, line in enumerate(top_window):
+                    if object_name and line.strip().startswith(f"class {object_name}"):
+                        matched_class = object_name
+                    if matched_class == object_name and func_name in line and re.match(r'^\s*def\b', line):
+                        indent_level = len(line) - len(line.lstrip())
+                        indent = ' ' * indent_level
+                        insert_pos = x
+                        for i, end_line in enumerate(top_window[x+1:], start=x+1):
+                            if re.match(r'^\s*(def|class)\b', end_line):
+                                end_pos = i
+                                break
+                        if end_pos is None:
+                            end_pos = len(top_window)
+                        commented_code = [f"{indent}''' [{self.cognalities.get_current_name()}][AI viewpoint][--original]"] + [indent + l for l in top_window[insert_pos:end_pos]] + [f"{indent}'''"]
+                        refactored_code = [f"{indent}#[{self.cognalities.get_current_name()}][AI viewpoint][--refactor] \n"]
+                        refactored_code += [indent + l for l in func_code.split('\n')]
+                        refactored_code += [f"{indent}"]
+                        top_window[:] = (
+                            top_window[:insert_pos] +
+                            commented_code + refactored_code +
+                            top_window[end_pos:]
+                        )
+                        break
+                if insert_pos is None and not object_name:
+                    self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--renew] \n''' ", func_code, ""])
+        else:
+            top_window = self.windows[0]["text"]
+            for function in objects:
+                func_name = function['name']
+                func_code = function['code']
+                object_name = function.get('object', None)
+                matched_class = None
+                insert_pos = None
+                end_pos = None
+                for x, line in enumerate(top_window):
+                    if object_name and line.strip().startswith(f"class {object_name}"):
+                        matched_class = object_name
+                    if matched_class == object_name and func_name in line and re.match(r'^\s*(def|class)\b', line):
+                        indent_level = len(line) - len(line.lstrip())
+                        indent = ' ' * indent_level
+                        insert_pos = x
+                        for i, end_line in enumerate(top_window[x:], start=x):
+                            if end_line.strip().startswith('def ') or end_line.strip().startswith('class '):
+                                end_pos = i
+                                break
+                        if end_pos is None:
+                            end_pos = len(top_window)
+                        commented_code = [f"{indent}''' [{self.cognalities.get_current_name()}][AI viewpoint][--new] "] + [indent + l for l in func_code.split('\n')] + [f"{indent}'''"]
+                        top_window[:] = (
+                            top_window[:insert_pos] +
+                            commented_code +
+                            top_window[end_pos:]
+                        )
+                        break
+                if insert_pos is None and not object_name:
+                    self.windows[0]["text"].extend([f"\n''' [{self.cognalities.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
     def write_file(self):
         self.status = self.revision_manager.write_file(self.cognalities, self.windows[0]["text"], self.windows[1]["text"])
     def read_file(self, filename):
@@ -870,4 +913,6 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
+
+
 
