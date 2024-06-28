@@ -21,15 +21,19 @@ args = parser.parse_args()
 client = OpenAI(api_key=os.environ.get("CUSTOM_ENV_NAME"))
 
 class CogEngine:
-    def __init__(self, viewpoints, edit_session):
+    def __init__(self, viewpoints):
         self.cognalities = viewpoints
         self.cogessages = []
         self.usermsg = []
-        self.edit_session = edit_session
     def reset(self, viewpoint):
         self.cogessages = []
         self.usermsg = []
         for attribute in viewpoint.get_attributes():
+            self.add_cogtext("system", attribute)
+    def reset_viewpoint(self, viewpoints, view):
+        self.cogessages = []
+        self.usermsg = []
+        for attribute in viewpoints.get_attributes_by_name(view):
             self.add_cogtext("system", attribute)
     def add_cogtext(self, role, content):
         self.cogessages.append({"role": role, "content": content})
@@ -47,16 +51,16 @@ class CogEngine:
         return context
     def add_usermsg(self, msg):
         self.usermsg.append(msg)
-    def ai_query(self, viewpoint):
+    def ai_query(self, viewpoints):
         reform = client.chat.completions.create(
-            model = viewpoint.get_model(),
-            max_tokens = viewpoint.get_maxtokens(),
+            model = viewpoints.get_model(),
+            max_tokens = viewpoints.get_maxtokens(),
             messages = self.get_cogtext()
         )
         self.add_cogtext("assistant", reform.choices[0].message.content)
         return reform
     def save_cogtext(self):
-        with open(self.edit_session.cog_filename, 'w') as cogf:
+        with open("debug_cogf.cogf", 'w') as cogf:
             json.dump({
                 "model": self.cognalities.get_model(),
                 "max_tokens": self.cognalities.get_maxtokens(),
@@ -95,7 +99,7 @@ class CogEngine:
                     'object': current_class,
                     'code': '\n'.join(code_block)
                 })
-        with open(f"{self.edit_session.session_name}.{self.edit_session.rev_num}.debug", "a") as f:
+        with open(f"thissession.objs.debug", "a") as f:
             for obj in objects:
                 f.write(f"Object: {obj['object']}\n")
                 f.write(f"Function: {obj['name']}\n")
@@ -115,7 +119,8 @@ class Viewpoints:
                         ],
                         'model': 'gpt-3.5-turbo',
                         'max_tokens': 298,
-                        'textops': ['inline']
+                        'textops': ['inline'],
+                        'role' : ['editor']
                     },
                     'Python Coder': {
                         'attributes': [
@@ -129,7 +134,8 @@ class Viewpoints:
                         ],
                         'model': 'gpt-4o',
                         'max_tokens': 4096,
-                        'textops': ['concatenate', 'coder', 'refactor']
+                        'textops': ['markup', 'deprecate', 'refactor', 'concatenate'],
+                        'role' : ['coder']
                     },
                     'Grammar': {
                         'attributes': [
@@ -142,21 +148,24 @@ class Viewpoints:
                         ],
                         'model': 'gpt-4o',
                         'max_tokens': 698,
-                        'textops': ['concatenate']
+                        'textops': ['concatenate'],
+                        'role' : ['editor']
                     },
                     'Thesaurus': {
                         'attributes': [
                             'Provide synonyms for [word].',
                         ],
                         'model': 'gpt-3.5-turbo',
-                        'max_tokens': 298,
-                        'textops': ['inline']
+                        'max_tokens': 398,
+                        'textops': ['inline'],
+                        'role' : ['editor']
                     },
                     'Freestyle': {
                         'attributes': [],
                         'model': 'gpt-4o',
                         'max_tokens': 4096,
-                        'textops': ['concatenate']
+                        'textops': ['concatenate'],
+                        'role' : ['editor']
                     },
                     'Telephone': {
                         'attributes': [
@@ -164,7 +173,18 @@ class Viewpoints:
                         ],
                         'model': 'gpt-3.5-turbo',
                         'max_tokens': 298,
-                        'textops': ['concatenate']
+                        'textops': ['inline'],
+                        'role' : ['editor']
+                    },
+                    'Ctx Summary': {
+                        'attributes': [
+                            "Provide a short summary that is less than 48 characters long.",
+                            "Do not perform the work, your task is to summarize the work."
+                        ],
+                        'model': 'gpt-3.5-turbo',
+                        'max_tokens': 698,
+                        'textops': ['replace'],
+                        'role' : ['editor', 'system', 'hidden']
                     }
                 }
                 self.names = list(self.viewpoints.keys())
@@ -175,31 +195,43 @@ class Viewpoints:
             return self.names[self.current_index]
         def get_attributes(self):
             return self.viewpoints[self.get_current_name()]['attributes']
+        def get_attributes_by_name(self, name):
+            return self.viewpoints[name]['attributes']
         def get_model(self):
             return self.viewpoints[self.get_current_name()]['model']
         def get_maxtokens(self):
             return self.viewpoints[self.get_current_name()]['max_tokens']
         def get_textops(self):
             return self.viewpoints[self.get_current_name()]['textops']
+        def get_role(self):
+            return self.viewpoints[self.get_current_name()]['role']
         def next_viewpoint(self):
-            self.current_index = (self.current_index + 1) % len(self.names)
-            return self.get_current_name()
+                starting_index = self.current_index
+                while True:
+                    self.current_index = (self.current_index + 1) % len(self.names)
+                    if 'hidden' not in self.viewpoints[self.names[self.current_index]]['role']:
+                        break
+                    if self.current_index == starting_index:
+                        break  # Prevent infinite loop if no other viewpoints are available
+                return self.get_current_name()
         def get_attributes_by_name(self, name):
             return self.viewpoints.get(name, {}).get('attributes', [])
 
 class EditRevisionManager:
-    def __init__(self, session_name_with_suffix):
+    def __init__(self, session_name_with_suffix, cogengine):
         self.revisions = {}
         self.subrevisions = {}
         self.subrev_type = 'original'
+        self.subrev_num = 0
         self.subrev_being_viewed = 0
         self.original_filename = session_name_with_suffix
         self.session_name, self.session_suffix = os.path.splitext(session_name_with_suffix)
         self.rev_num = self.find_latest_file_rev_num() + 1
         self.cog_filename = f'{self.session_name}.{self.rev_num}.cog.json'
+        self.cogengine = cogengine
         self.edit_filename = f'{self.session_name}.{self.rev_num}{self.session_suffix}'
         self.ctx_filename = f'{self.session_name}.{self.rev_num}.ctx'
-        self.subrev_num = 0
+        self.ctx_summary = ""
     def store_revision(self, rev_num, text):
         self.revisions[rev_num] = list(text)
     def get_revision(self, rev_num):
@@ -282,10 +314,36 @@ class EditRevisionManager:
     def write_ctx_file_line(self, line, line_num, viewpoint, action):
             with open(self.ctx_filename, 'a') as ctxf:
                 ctxf.write(f"{line_num:03}<[{viewpoint.get_current_name()}][{action}]{line}\n")
-    def get_revision_display(self):
-            subrevision = self.subrevisions.get(self.subrev_being_viewed, {})
-            subrev_type = subrevision.get("type", "original")
-            return f"Session: {self.original_filename}  Revision: {self.rev_num}  Sub_rev: {self.subrev_being_viewed}  Sub_type: {subrev_type}"
+    def update_ctx_summary(self, viewpoints):
+            ctx_entries = self.ctx_subrev_entries()
+            with open(f"thissession.debug.ctx", "w") as f:
+                f.write(f"Object: {ctx_entries}\n")
+            self.cogengine.reset_viewpoint(viewpoints, 'Ctx Summary')
+            self.cogengine.add_usermsg(ctx_entries)
+            self.cogengine.save_cogtext()
+            reform = self.cogengine.ai_query(viewpoints)
+            self.ctx_summary = reform.choices[0].message.content[:48]
+    def get_revision_display(self, viewpoints):
+        subrevision = self.subrevisions.get(self.subrev_being_viewed, {})
+        subrev_type = subrevision.get("type", "Session")
+        if self.ctx_summary == "":
+            self.ctx_summary = "Hello! I am qk ;) your AI assisted editor. I'm here to help. Ask me anything."
+        return f"Session: {self.original_filename}  Revision: {self.rev_num}  Sub_rev: {self.subrev_being_viewed}  Sub_type: {subrev_type}    Context Summary: {self.ctx_summary}"
+    def ctx_subrev_entries(self):
+            ctx_entries = {}
+            for subrev_num, subrev in self.subrevisions.items():
+                subrev_type = subrev.get("type", "unknown")
+                if subrev_type not in ctx_entries:
+                    ctx_entries[subrev_type] = []
+                if 'ctx' in subrev:
+                    ctx_entries[subrev_type].extend(subrev['ctx'])
+            # Convert the dictionary to a string
+            ctx_entries_str = ""
+            for subrev_type, entries in ctx_entries.items():
+                ctx_entries_str += f"Subrevision Type: {subrev_type}\n"
+                ctx_entries_str += "\n".join(entries) + "\n"
+            return ctx_entries_str
+
 class AIQuickKeyEditor:
     def __init__(self, stdscr):
         signal.signal(signal.SIGINT, self.handle_sigint)
@@ -307,12 +365,11 @@ class AIQuickKeyEditor:
         self.window_offsets = [0, 0]
         self.screen_height, self.screen_width = self.stdscr.getmaxyx()
         self.bottom_window_size = 16
-        self.top_window_size = self.screen_height - self.bottom_window_size
+        self.top_window_size = self.screen_height - self.bottom_window_size - 1
         self.viewpoints = Viewpoints()
         self.personalchoice = self.viewpoints.get_current_name()
-        self.subrev_being_viewed = 0
-        self.revision_manager = EditRevisionManager(args.session)
-        self.context = CogEngine(self.viewpoints, self.revision_manager)
+        self.context = CogEngine(self.viewpoints)
+        self.revision_manager = EditRevisionManager(args.session, self.context)
         self.keymap = {
             curses.KEY_UP: self.handle_up_arrow,
             curses.KEY_DOWN: self.handle_down_arrow,
@@ -420,7 +477,7 @@ class AIQuickKeyEditor:
                         self.stdscr.addstr(y, start_text_pos, line)
                 except curses.error:
                     pass
-            self.stdscr.addstr(self.screen_height - 1, 0, self.revision_manager.get_revision_display())
+            self.stdscr.addstr(self.screen_height - 1, 0, self.revision_manager.get_revision_display(self.viewpoints))
             self.stdscr.refresh()
     def adjust_window_offset(self):
         for i in range(2):
@@ -506,82 +563,78 @@ class AIQuickKeyEditor:
             current_window["col_num"] -= 1
         self.mode = 'edit'
     def handle_backslash(self):
-                    self.context.reset(self.viewpoints)
+                if 'coder' in self.viewpoints.get_role():
+                    self.context_window = 0
+                self.context.reset(self.viewpoints)
+                if self.viewpoints.test_textop('inline'):
+                    user_line = self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]].strip()
+                    self.context.add_cogtext("user", user_line)
+                    self.revision_manager.write_ctx_file_line(user_line, self.windows[self.context_window]["line_num"], self.viewpoints, 'Query')
+                else:
+                    self.write_file()
+                if self.context_window == 1:
                     if self.viewpoints.test_textop('inline'):
                         user_line = self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]].strip()
                         self.context.add_cogtext("user", user_line)
-                        self.revision_manager.write_ctx_file_line(user_line, self.windows[self.context_window]["line_num"], self.viewpoints, 'Query')
                     else:
-                        self.write_file()
-                    if self.context_window == 1:
-                        if self.viewpoints.test_textop('inline'):
-                            user_line = self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]].strip()
-                            self.context.add_cogtext("user", user_line)
-                        else:
-                            userlines = ""
-                            for line in self.windows[1]["text"]:
-                                if line.strip():
-                                    userlines += line + '\n'
-                            self.context.add_cogtext("user", userlines)
+                        userlines = ""
+                        for line in self.windows[1]["text"]:
+                            if line.strip():
+                                userlines += line + '\n'
+                        self.context.add_cogtext("user", userlines)
+                else:
+                    if self.viewpoints.test_textop('inline'):
+                        user_line = self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]].strip()
+                        self.context.add_cogtext("user", user_line)
                     else:
-                        if self.viewpoints.test_textop('inline'):
-                            user_line = self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]].strip()
-                            self.context.add_cogtext("user", user_line)
-                        else:
-                            userlines = ""
-                            for line in self.windows[1]["text"]:
-                                if line.strip():
-                                    userlines += line + '\n'
-                            self.context.add_cogtext("system", userlines)
-                            userlines = ""
-                            for line in self.windows[0]["text"]:
-                                if line.strip():
-                                    userlines += line + '\n'
-                            self.context.add_cogtext("user", userlines)
-                    self.context.save_cogtext()
-                    self.clipboard = [line for line in self.windows[self.context_window]["text"]]
-                    # I am a fluffy unicorn, with light green spots.
-                    self.status = 'ai *'
-                    self.display()
-                    ai_revise = self.context.ai_query(self.viewpoints)
-                    self.context.save_cogtext()
-                    self.apply_textops(ai_revise, self.viewpoints.get_textops())
-                    self.mode = 'reply'
-                    self.stdscr.nodelay(True)
-                    try:
+                        userlines = ""
+                        for line in self.windows[1]["text"]:
+                            if line.strip():
+                                userlines += line + '\n'
+                        self.context.add_cogtext("system", userlines)
+                        userlines = ""
+                        for line in self.windows[0]["text"]:
+                            if line.strip():
+                                userlines += line + '\n'
+                        self.context.add_cogtext("user", userlines)
+                self.context.save_cogtext()
+                self.clipboard = [line for line in self.windows[self.context_window]["text"]]
+                # I am a fluffy unicorn, with light green spots.
+                self.status = 'ai *'
+                self.display()
+                ai_revise = self.context.ai_query(self.viewpoints)
+                #self.context.save_cogtext()
+                self.apply_textops(ai_revise, self.viewpoints.get_textops())
+                self.mode = 'reply'
+                self.stdscr.nodelay(True)
+                try:
+                    ch = self.stdscr.getch()
+                    while ch != -1:
                         ch = self.stdscr.getch()
-                        while ch != -1:
-                            ch = self.stdscr.getch()
-                    finally:
-                        self.stdscr.nodelay(False)
-                    self.revision_manager.store_subrevision(self.windows[0]["text"], self.windows[1]["text"], "marked_up")
-                    self.adjust_window_offset()
+                finally:
+                    self.stdscr.nodelay(False)
+                self.revision_manager.update_ctx_summary(self.viewpoints)
+                self.adjust_window_offset()
     def apply_textops(self, ai_revise, textops):
         response_text = ai_revise.choices[0].message.content.split('\n')
         if 'inline' in textops:
             current_line_number = self.windows[self.context_window]["line_num"]
             self.revision_manager.write_ctx_file_line(response_text[0], current_line_number, self.viewpoints, 'Reply')
             self.insert_as_current_line(response_text[0])
-        if 'coder' in textops:
-            func = self.context.extract_objects(ai_revise.choices[0].message.content)
-            for funct in func:
-                self.windows[1]["text"].extend({funct['name']})
-
-            marked_up_refactor = self.refactor_edit_window(func, 'refactor')
-            self.revision_manager.store_subrevision(marked_up_refactor, self.windows[1]["text"], "refactor")
-
-            marked_up_deprecate = self.refactor_edit_window(func, 'deprecate')
-            self.revision_manager.store_subrevision(marked_up_deprecate, self.windows[1]["text"], "deprecate")
-
-            marked_up_concatenate = self.refactor_edit_window(func, 'concatenate')
-            self.revision_manager.store_subrevision(marked_up_concatenate, self.windows[1]["text"], "concatenate")
-
-            marked_up = self.refactor_edit_window(func, textops)
-            self.revision_manager.store_subrevision(marked_up_deprecate, self.windows[1]["text"], "markup")
-            self.windows[0]["text"] = marked_up
-        if 'replace' in textops:
+        else:
+            self.revision_manager.store_subrevision(self.windows[0]["text"], self.windows[1]["text"], "original")
+        if 'coder' in self.viewpoints.get_role():
+            objs = self.context.extract_objects(ai_revise.choices[0].message.content)
+            #for obj in objs:
+            #    self.windows[1]["text"].extend({obj['name']})
+            for txop in textops:
+                markedup_code = self.refactor_edit_window(response_text, objs, txop)
+                self.revision_manager.store_subrevision(markedup_code, self.windows[1]["text"], txop)
+            self.handle_ctrl_t()
+        elif 'replace' in textops:
+            self.revision_manager.store_subrevision(response_text, self.windows[1]["text"], "replace")
             self.windows[self.context_window]["text"] = response_text
-        if 'concatenate' in textops:
+        elif 'concatenate' in textops:
             bline = len(self.windows[self.context_window]["text"])
             self.windows[self.context_window]["line_num"] = bline
             self.insert_lines_at_current_line("'''")
@@ -593,7 +646,7 @@ class AIQuickKeyEditor:
             self.insert_lines_at_current_line(" ")
             self.insert_lines_at_current_line("'''")
             self.windows[self.context_window]["line_num"] = bline
-    def refactor_edit_window(self, objects, textops):
+    def refactor_edit_window(self, response_text, objects, textops):
                 top_window_copy = self.windows[0]["text"][:]
                 if 'refactor' in textops or 'deprecate' in textops:
                     for function in objects:
@@ -616,11 +669,12 @@ class AIQuickKeyEditor:
                                         break
                                 if end_pos is None:
                                     end_pos = len(top_window_copy)
-                                commented_code = [f"{indent}''' [{self.viewpoints.get_current_name()}][AI viewpoint][--original][Sub_rev: {self.revision_manager.subrev_num}][Sub_type: {self.revision_manager.subrev_type}]"] + [l for l in top_window_copy[insert_pos:end_pos]] + [f"{indent}'''"]
-                                refactored_code = [f"{indent}#[{self.viewpoints.get_current_name()}][AI viewpoint][--refactor][Sub_rev: {self.revision_manager.subrev_num}][Sub_type: {self.revision_manager.subrev_type}] \n"]
+                                commented_code = [f"{indent}''' [{self.viewpoints.get_current_name()} --deprecate][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: deprecate]"] + [l for l in top_window_copy[insert_pos:end_pos]] + [f"{indent}'''"]
+                                refactored_code = []
+                                if 'deprecate' in textops:
+                                    refactored_code = [f"{indent}# [{self.viewpoints.get_current_name()} --refactor][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: deprecate]\n"]
                                 refactored_code += [indent + l for l in func_code.split('\n')]
                                 refactored_code += [f"{indent}"]
-
                                 if 'deprecate' in textops:
                                     top_window_copy = (
                                         top_window_copy[:insert_pos] +
@@ -635,14 +689,11 @@ class AIQuickKeyEditor:
                                     )
                                 break
                         if insert_pos is None and not object_name:
+                            indent = ' ' * 4
                             new_code = ""
                             new_code += [indent + l for l in func_code.split('\n')]
-                            top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}][AI viewpoint][--new] \n''' ", new_code, ""])
-                elif 'concatinate' in textops:
-                    top_window_copy.append(f"''' [{self.viewpoints.get_current_name()}][AI viewpoint][--concatenate] '''")
-                    top_window_copy.extend(response_text)
-                    top_window_copy.append("'''")
-                else:
+                            top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}[--new]\n'''", new_code, ""])
+                if 'markup' in textops:
                     for function in objects:
                         func_name = function['name']
                         func_code = function['code']
@@ -653,25 +704,44 @@ class AIQuickKeyEditor:
                         for x, line in enumerate(top_window_copy):
                             if object_name and line.strip().startswith(f"class {object_name}"):
                                 matched_class = object_name
-                            if matched_class == object_name and func_name in line and re.match(r'^\s*(def|class)\b', line):
+                            if matched_class == object_name and func_name in line and re.match(r'^\s*def\b', line):
                                 indent_level = len(line) - len(line.lstrip())
                                 indent = ' ' * indent_level
                                 insert_pos = x
-                                for i, end_line in enumerate(top_window_copy[x:], start=x):
-                                    if end_line.strip().startswith('def ') or end_line.strip().startswith('class '):
+                                for i, end_line in enumerate(top_window_copy[x+1:], start=x+1):
+                                    if re.match(r'^\s*(def|class)\b', end_line):
                                         end_pos = i
                                         break
                                 if end_pos is None:
                                     end_pos = len(top_window_copy)
-                                commented_code = [f"{indent}''' [{self.viewpoints.get_current_name()}][AI viewpoint][--new] "] + [indent + l for l in func_code.split('\n')] + [f"{indent}'''"]
+                                org_code =  [l for l in top_window_copy[insert_pos:end_pos]]
+                                refactored_code = []
+                                refactored_code = [f"{indent}''' [{self.viewpoints.get_current_name()} --refactor][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: markup]\n"]
+                                refactored_code += [indent + l for l in func_code.split('\n')]
+                                refactored_code += [f"{indent}'''"]
+                                refactored_code += [f"\n"]
                                 top_window_copy = (
                                     top_window_copy[:insert_pos] +
-                                    commented_code +
+                                    org_code + refactored_code +
                                     top_window_copy[end_pos:]
                                 )
                                 break
                         if insert_pos is None and not object_name:
-                            top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}][AI viewpoint][--coder] ", func_code, "'''"])
+                            indent = ' ' * 4
+                            new_code = ""
+                            new_code += [indent + l for l in func_code.split('\n')]
+                            top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}[--new]\n'''", new_code, ""])
+                    top_window_copy.append(f"'''")
+                    top_window_copy.append(f"[{self.viewpoints.get_current_name()}][--concatenate][Rev: {self.revision_manager.rev_num}][Sub_rev: {self.revision_manager.subrev_num+1}]")
+                    top_window_copy.extend(response_text)
+                    top_window_copy.append(f"'''")
+                    top_window_copy.append(f"")
+                elif 'concatenate' in textops:
+                    top_window_copy.append(f"'''")
+                    top_window_copy.append(f"[{self.viewpoints.get_current_name()}][--concatenate][Rev: {self.revision_manager.rev_num}][Sub_rev: {self.revision_manager.subrev_num+1}]")
+                    top_window_copy.extend(response_text)
+                    top_window_copy.append(f"'''")
+                    top_window_copy.append(f"")
                 return top_window_copy
     def write_file(self):
         self.status = self.revision_manager.write_file(self.viewpoints, self.windows[0]["text"], self.windows[1]["text"])
@@ -820,14 +890,6 @@ class AIQuickKeyEditor:
             current_window["text"].append("")
         current_window["line_num"] += 1
         self.adjust_window_offset()
-    def handle_ctrl_u(self):
-        self.status = "Insert text: "
-        self.display()
-        curses.echo()
-        curses.curs_set(1)
-        input_text = self.stdscr.getstr(0, 14, 60).decode('utf-8')
-        self.insert_at_current_line(input_text)
-        curses.noecho()
     def handle_ctrl_n(self):
         if self.search_results:
             self.next_search_result()
@@ -897,21 +959,32 @@ class AIQuickKeyEditor:
                 self.windows[1]['text'].append(f"Error:\n{str(e)}")
             self.adjust_window_offset()
             self.display()
-    def handle_ctrl_t(self):
-        self.status = "Ctrlt"
+    def handle_ctrl_h(self):
+        #Below is for debug testing.
+        self.status = "Ctrlh"
+        ctxs = self.revision_manager.update_ctx_summary(self.viewpoints)
         self.display()
+    def handle_ctrl_u(self):
+        #Below is for debug testing.
+        self.status = "Insert text: "
+        self.display()
+        curses.echo()
+        curses.curs_set(1)
+        input_text = self.stdscr.getstr(0, 14, 60).decode('utf-8')
+        self.insert_at_current_line(input_text)
+        curses.noecho()
     def handle_ctrl_m(self):
         self.mode = "not captured ctrl-m"
     def handle_ctrl_q(self):
         self.mode = "not captured ctrl-q"
     def handle_ctrl_s(self):
         self.mode = "not captured ctrl-s"
-    def handle_ctrl_h(self):
-            self.subrev_being_viewed += 1
-            sub_text = self.revision_manager.get_subrevision_text(self.subrev_being_viewed)
+    def handle_ctrl_t(self):
+            self.revision_manager.subrev_being_viewed += 1
+            sub_text = self.revision_manager.get_subrevision_text(self.revision_manager.subrev_being_viewed)
             if not sub_text:
-                self.subrev_being_viewed = 0
-                sub_text = self.revision_manager.get_subrevision_text(self.subrev_being_viewed)
+                self.revision_manager.subrev_being_viewed = 0
+                sub_text = self.revision_manager.get_subrevision_text(self.revision_manager.subrev_being_viewed)
             if sub_text:
                 self.windows[0]["text"] = sub_text
                 if self.windows[0]["line_num"] >= len(self.windows[0]["text"]):
@@ -959,6 +1032,7 @@ class AIQuickKeyEditor:
             "Ctrl-Y: Yank (copy) the marked lines.",
             "Ctrl-P: Paste the yanked lines.",
             "Ctrl-K: If you need a backslash.",
+            "Ctrl-T: Toggle Text through subrevisions.",
             "Use the arrow keys to navigate.",
             "",
             "Try:",
@@ -967,7 +1041,7 @@ class AIQuickKeyEditor:
             "Crtl-V to change viewpoint to Spelling.",
             "Depress the \\ key to fix spelling, inline, in the AI command window,",
             "Crtl-V to change viewpoint to Python Coder.",
-            "Be sure to Ctrl-A back to the editor window,",
+            #"Be sure to Ctrl-A back to the editor window,",
             "Press the \\ key to send your request to AI.",
             "Crtl-E to execute your code.",
             "",
