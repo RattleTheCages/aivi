@@ -2,7 +2,7 @@
 #AIQuickKeyEditor is the prototype editor for the Aivi editor.
 #This editor is a fully functioning editor that offers AI assistance.
 #The top window is where you enter text and edit it; the bottom window is the AI command window, where you can enter requests for AI assistance.
-#Use ctrl-v to choose the type of AI assistance you need, such as grammar and spelling corrections, or Python coding.
+#Use ctrl-v to choose the viewpoint, the type of AI assistance you need, such as grammar and spelling corrections, or Python coding.
 #In freestyle viewpoint, one can enter any question or content, similar to a well-known subscription AI interface.
 #This work is copyright. All rights reserved.
 
@@ -119,8 +119,8 @@ class Viewpoints:
                         ],
                         'model': 'gpt-3.5-turbo',
                         'max_tokens': 298,
-                        'textops': ['inline'],
-                        'role' : ['editor']
+                        'textops': ['Inline'],
+                        'role' : ['Editor']
                     },
                     'Python Coder': {
                         'attributes': [
@@ -134,8 +134,8 @@ class Viewpoints:
                         ],
                         'model': 'gpt-4o',
                         'max_tokens': 4096,
-                        'textops': ['markup', 'deprecate', 'refactor', 'concatenate'],
-                        'role' : ['coder']
+                        'textops': ['Markup', 'Deprecate', 'Refactor', 'Concatenate'],
+                        'role' : ['Coder']
                     },
                     'Grammar': {
                         'attributes': [
@@ -143,13 +143,13 @@ class Viewpoints:
                             'After correcting the spelling provide an alternate grammatical phrasing.',
                             'In the alternate phrasing please include line breaks at about the same frequency as the input text.',
                             'In the alternate phrasing try to offer the phrasing in a style of the original',
-                            'For example, if the style is technical or professional, offer rephrasing in at the same level, or higher, of grammar and content rephrasing.',
+                            'For example, if the style is technical or professional, offer rephrasing in at the same level, or higher, of grammar and content rephrasing.'
                             'If the style is less professional your reply does not have to be as stringent.'
                         ],
                         'model': 'gpt-4o',
                         'max_tokens': 698,
-                        'textops': ['concatenate'],
-                        'role' : ['editor']
+                        'textops': ['Concatenate'],
+                        'role' : ['Editor']
                     },
                     'Thesaurus': {
                         'attributes': [
@@ -157,15 +157,15 @@ class Viewpoints:
                         ],
                         'model': 'gpt-3.5-turbo',
                         'max_tokens': 398,
-                        'textops': ['inline'],
-                        'role' : ['editor']
+                        'textops': ['Inline'],
+                        'role' : ['Editor']
                     },
                     'Freestyle': {
                         'attributes': [],
                         'model': 'gpt-4o',
                         'max_tokens': 4096,
-                        'textops': ['concatenate'],
-                        'role' : ['editor']
+                        'textops': ['Concatenate'],
+                        'role' : ['Editor']
                     },
                     'Telephone': {
                         'attributes': [
@@ -173,18 +173,18 @@ class Viewpoints:
                         ],
                         'model': 'gpt-3.5-turbo',
                         'max_tokens': 298,
-                        'textops': ['inline'],
-                        'role' : ['editor']
+                        'textops': ['Inline'],
+                        'role' : ['Editor']
                     },
                     'Ctx Summary': {
                         'attributes': [
-                            "Provide a short summary that is less than 48 characters long.",
+                            "Provide a short summary that is less than or equal to 64 characters long.",
                             "Do not perform the work, your task is to summarize the work."
                         ],
                         'model': 'gpt-3.5-turbo',
                         'max_tokens': 698,
                         'textops': ['replace'],
-                        'role' : ['editor', 'system', 'hidden']
+                        'role' : ['Editor', 'System', 'Hidden']
                     }
                 }
                 self.names = list(self.viewpoints.keys())
@@ -209,7 +209,7 @@ class Viewpoints:
                 starting_index = self.current_index
                 while True:
                     self.current_index = (self.current_index + 1) % len(self.names)
-                    if 'hidden' not in self.viewpoints[self.names[self.current_index]]['role']:
+                    if 'Hidden' not in self.viewpoints[self.names[self.current_index]]['role']:
                         break
                     if self.current_index == starting_index:
                         break  # Prevent infinite loop if no other viewpoints are available
@@ -297,6 +297,7 @@ class EditRevisionManager:
             with open(self.ctx_filename, 'a') as ctxf:
                 for line_num, line in enumerate(command_window_content, start=1):
                     self.write_ctx_file_line(line, line_num, viewpoint, 'Write')
+                ctxf.write(f"[Context Summary] {self.ctx_summary}\n")
         except Exception as e:
             return "no wr"
         finally:
@@ -315,20 +316,32 @@ class EditRevisionManager:
             with open(self.ctx_filename, 'a') as ctxf:
                 ctxf.write(f"{line_num:03}<[{viewpoint.get_current_name()}][{action}]{line}\n")
     def update_ctx_summary(self, viewpoints):
+            if 'Inline' in viewpoints.get_textops():
+                return
             ctx_entries = self.ctx_subrev_entries()
-            with open(f"thissession.debug.ctx", "w") as f:
-                f.write(f"Object: {ctx_entries}\n")
+            if not ctx_entries or len(ctx_entries) < 3:
+                return
             self.cogengine.reset_viewpoint(viewpoints, 'Ctx Summary')
             self.cogengine.add_usermsg(ctx_entries)
             self.cogengine.save_cogtext()
             reform = self.cogengine.ai_query(viewpoints)
-            self.ctx_summary = reform.choices[0].message.content[:48]
+            self.ctx_summary = reform.choices[0].message.content[:64]
     def get_revision_display(self, viewpoints):
         subrevision = self.subrevisions.get(self.subrev_being_viewed, {})
         subrev_type = subrevision.get("type", "Session")
         if self.ctx_summary == "":
-            self.ctx_summary = "Hello! I am qk ;) your AI assisted editor. I'm here to help. Ask me anything."
+            self.ctx_summary = "Hello!  I am qk ;)  Your AI assisted editor.  How can I help?"
         return f"Session: {self.original_filename}  Revision: {self.rev_num}  Sub_rev: {self.subrev_being_viewed}  Sub_type: {subrev_type}    Context Summary: {self.ctx_summary}"
+    def find_highest_markup_subrevision(self):
+        highest_subrev_num = -1
+        subrev_text = None
+        for subrev_num, subrevision in self.subrevisions.items():
+            if subrevision.get("type") == "Markup":
+                if subrev_num > highest_subrev_num:
+                    highest_subrev_num = subrev_num
+                    subrev_text = subrevision.get("text")
+        self.subrev_being_viewed = highest_subrev_num
+        return subrev_text
     def ctx_subrev_entries(self):
             ctx_entries = {}
             for subrev_num, subrev in self.subrevisions.items():
@@ -337,7 +350,6 @@ class EditRevisionManager:
                     ctx_entries[subrev_type] = []
                 if 'ctx' in subrev:
                     ctx_entries[subrev_type].extend(subrev['ctx'])
-            # Convert the dictionary to a string
             ctx_entries_str = ""
             for subrev_type, entries in ctx_entries.items():
                 ctx_entries_str += f"Subrevision Type: {subrev_type}\n"
@@ -477,7 +489,11 @@ class AIQuickKeyEditor:
                         self.stdscr.addstr(y, start_text_pos, line)
                 except curses.error:
                     pass
-            self.stdscr.addstr(self.screen_height - 1, 0, self.revision_manager.get_revision_display(self.viewpoints))
+            summary_str = self.revision_manager.get_revision_display(self.viewpoints)
+            max_len = curses.COLS - 1
+            if len(summary_str) > max_len:
+                summary_str = summary_str[:max_len]
+            self.stdscr.addstr(self.screen_height - 1, 0, summary_str)
             self.stdscr.refresh()
     def adjust_window_offset(self):
         for i in range(2):
@@ -563,17 +579,17 @@ class AIQuickKeyEditor:
             current_window["col_num"] -= 1
         self.mode = 'edit'
     def handle_backslash(self):
-                if 'coder' in self.viewpoints.get_role():
+                if 'Coder' in self.viewpoints.get_role():
                     self.context_window = 0
                 self.context.reset(self.viewpoints)
-                if self.viewpoints.test_textop('inline'):
+                if self.viewpoints.test_textop('Inline'):
                     user_line = self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]].strip()
                     self.context.add_cogtext("user", user_line)
                     self.revision_manager.write_ctx_file_line(user_line, self.windows[self.context_window]["line_num"], self.viewpoints, 'Query')
                 else:
                     self.write_file()
                 if self.context_window == 1:
-                    if self.viewpoints.test_textop('inline'):
+                    if self.viewpoints.test_textop('Inline'):
                         user_line = self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]].strip()
                         self.context.add_cogtext("user", user_line)
                     else:
@@ -583,7 +599,7 @@ class AIQuickKeyEditor:
                                 userlines += line + '\n'
                         self.context.add_cogtext("user", userlines)
                 else:
-                    if self.viewpoints.test_textop('inline'):
+                    if self.viewpoints.test_textop('Inline'):
                         user_line = self.windows[self.context_window]["text"][self.windows[self.context_window]["line_num"]].strip()
                         self.context.add_cogtext("user", user_line)
                     else:
@@ -617,28 +633,52 @@ class AIQuickKeyEditor:
                 self.adjust_window_offset()
     def apply_textops(self, ai_revise, textops):
         response_text = ai_revise.choices[0].message.content.split('\n')
-        if 'inline' in textops:
+        if 'Inline' in textops:
             current_line_number = self.windows[self.context_window]["line_num"]
             self.revision_manager.write_ctx_file_line(response_text[0], current_line_number, self.viewpoints, 'Reply')
             self.insert_as_current_line(response_text[0])
         else:
-            self.revision_manager.store_subrevision(self.windows[0]["text"], self.windows[1]["text"], "original")
-        if 'coder' in self.viewpoints.get_role():
+            self.revision_manager.store_subrevision(self.windows[0]["text"], self.windows[1]["text"], "Original")
+        if 'Coder' in self.viewpoints.get_role():
             objs = self.context.extract_objects(ai_revise.choices[0].message.content)
             #for obj in objs:
             #    self.windows[1]["text"].extend({obj['name']})
-            for txop in textops:
-                markedup_code = self.refactor_edit_window(response_text, objs, txop)
-                self.revision_manager.store_subrevision(markedup_code, self.windows[1]["text"], txop)
-            self.handle_ctrl_t()
+            for tx_op in textops:
+                markedup_code = self.refactor_edit_window(response_text, objs, tx_op)
+                self.revision_manager.store_subrevision(markedup_code, self.windows[1]["text"], tx_op)
+            sub_text = self.revision_manager.find_highest_markup_subrevision()
+            if sub_text:
+                top_window_text = self.windows[0]["text"]
+                top_window_copy = list(top_window_text)
+                found = False
+                for idx, line in enumerate(top_window_copy):
+                    if any(word in line for word in textops):
+                        self.windows[0]["line_num"] = idx
+                        self.windows[0]["col_num"] = line.find(next(word for word in textops if word in line))
+                        found = True
+                        break
+                if not found:
+                    self.windows[0]["line_num"] = 0
+                    self.windows[0]["col_num"] = 0
+                self.windows[0]["text"] = sub_text
+                if self.windows[0]["line_num"] >= len(self.windows[0]["text"]):
+                    self.windows[0]["line_num"] = len(self.windows[0]["text"]) - 1
+                if self.windows[0]["line_num"] < 0:
+                    self.windows[0]["line_num"] = 0
+                if self.windows[0]["col_num"] > len(self.windows[0]["text"][self.windows[0]["line_num"]]):
+                    self.windows[0]["col_num"] = len(self.windows[0]["text"][self.windows[0]["line_num"]])
+                if self.windows[0]["col_num"] < 0:
+                    self.windows[0]["col_num"] = 0
+                self.search_offset()
+                self.adjust_window_offset()
         elif 'replace' in textops:
             self.revision_manager.store_subrevision(response_text, self.windows[1]["text"], "replace")
             self.windows[self.context_window]["text"] = response_text
-        elif 'concatenate' in textops:
+        elif 'Concatenate' in textops:
             bline = len(self.windows[self.context_window]["text"])
             self.windows[self.context_window]["line_num"] = bline
             self.insert_lines_at_current_line("'''")
-            self.insert_lines_at_current_line(f"[{self.viewpoints.get_current_name()}][AI viewpoint][--concatenate]")
+            self.insert_lines_at_current_line(f"[{self.viewpoints.get_current_name()}][AI viewpoint][--Concatenate]")
             self.windows[self.context_window]["text"].extend(response_text)
             self.windows[self.context_window]["text"].extend('\n')
             self.windows[self.context_window]["line_num"] = len(self.windows[self.context_window]["text"]) - 1
@@ -648,7 +688,7 @@ class AIQuickKeyEditor:
             self.windows[self.context_window]["line_num"] = bline
     def refactor_edit_window(self, response_text, objects, textops):
                 top_window_copy = self.windows[0]["text"][:]
-                if 'refactor' in textops or 'deprecate' in textops:
+                if 'Refactor' in textops or 'Deprecate' in textops:
                     for function in objects:
                         func_name = function['name']
                         func_code = function['code']
@@ -663,25 +703,28 @@ class AIQuickKeyEditor:
                                 indent_level = len(line) - len(line.lstrip())
                                 indent = ' ' * indent_level
                                 insert_pos = x
-                                for i, end_line in enumerate(top_window_copy[x+1:], start=x+1):
+                                for y, end_line in enumerate(top_window_copy[x+1:], start=x+1):
                                     if re.match(r'^\s*(def|class)\b', end_line):
-                                        end_pos = i
+                                        end_pos = y
                                         break
                                 if end_pos is None:
                                     end_pos = len(top_window_copy)
-                                commented_code = [f"{indent}''' [{self.viewpoints.get_current_name()} --deprecate][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: deprecate]"] + [l for l in top_window_copy[insert_pos:end_pos]] + [f"{indent}'''"]
+                                commented_code = [f"{indent}''' [{self.viewpoints.get_current_name()} --Deprecate][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: Deprecate]"] + [l for l in top_window_copy[insert_pos:end_pos]] + [f"{indent}'''"]
                                 refactored_code = []
-                                if 'deprecate' in textops:
-                                    refactored_code = [f"{indent}# [{self.viewpoints.get_current_name()} --refactor][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: deprecate]\n"]
-                                refactored_code += [indent + l for l in func_code.split('\n')]
-                                refactored_code += [f"{indent}"]
-                                if 'deprecate' in textops:
+                                if 'Deprecate' in textops:
+                                    refactored_code = [f"{indent}# [{self.viewpoints.get_current_name()} --Refactor][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: Deprecate]\n"]
+                                for l in func_code.split('\n'):
+                                    if 'def' in l:
+                                        refactored_code += [indent + l]
+                                    else:
+                                        refactored_code += [l]
+                                if 'Deprecate' in textops:
                                     top_window_copy = (
                                         top_window_copy[:insert_pos] +
                                         commented_code + refactored_code +
                                         top_window_copy[end_pos:]
                                     )
-                                if 'refactor' in textops:
+                                if 'Refactor' in textops:
                                     top_window_copy = (
                                         top_window_copy[:insert_pos] +
                                         refactored_code +
@@ -693,7 +736,7 @@ class AIQuickKeyEditor:
                             new_code = ""
                             new_code += [indent + l for l in func_code.split('\n')]
                             top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}[--new]\n'''", new_code, ""])
-                if 'markup' in textops:
+                if 'Markup' in textops:
                     for function in objects:
                         func_name = function['name']
                         func_code = function['code']
@@ -708,16 +751,20 @@ class AIQuickKeyEditor:
                                 indent_level = len(line) - len(line.lstrip())
                                 indent = ' ' * indent_level
                                 insert_pos = x
-                                for i, end_line in enumerate(top_window_copy[x+1:], start=x+1):
+                                for y, end_line in enumerate(top_window_copy[x+1:], start=x+1):
                                     if re.match(r'^\s*(def|class)\b', end_line):
-                                        end_pos = i
+                                        end_pos = y
                                         break
                                 if end_pos is None:
                                     end_pos = len(top_window_copy)
                                 org_code =  [l for l in top_window_copy[insert_pos:end_pos]]
                                 refactored_code = []
-                                refactored_code = [f"{indent}''' [{self.viewpoints.get_current_name()} --refactor][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: markup]\n"]
-                                refactored_code += [indent + l for l in func_code.split('\n')]
+                                refactored_code = [f"{indent}''' [{self.viewpoints.get_current_name()} --Refactor][{object_name}::{func_name}][Rev:{self.revision_manager.rev_num} Sub:{self.revision_manager.subrev_num+1}][Type: Markup]\n"]
+                                for l in func_code.split('\n'):
+                                    if 'def' in l:
+                                        refactored_code += [indent + l]
+                                    else:
+                                        refactored_code += [l]
                                 refactored_code += [f"{indent}'''"]
                                 refactored_code += [f"\n"]
                                 top_window_copy = (
@@ -732,13 +779,13 @@ class AIQuickKeyEditor:
                             new_code += [indent + l for l in func_code.split('\n')]
                             top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}[--new]\n'''", new_code, ""])
                     top_window_copy.append(f"'''")
-                    top_window_copy.append(f"[{self.viewpoints.get_current_name()}][--concatenate][Rev: {self.revision_manager.rev_num}][Sub_rev: {self.revision_manager.subrev_num+1}]")
+                    top_window_copy.append(f"[{self.viewpoints.get_current_name()}][--Concatenate][Rev: {self.revision_manager.rev_num}][Sub_rev: {self.revision_manager.subrev_num+1}]")
                     top_window_copy.extend(response_text)
                     top_window_copy.append(f"'''")
                     top_window_copy.append(f"")
-                elif 'concatenate' in textops:
+                elif 'Concatenate' in textops:
                     top_window_copy.append(f"'''")
-                    top_window_copy.append(f"[{self.viewpoints.get_current_name()}][--concatenate][Rev: {self.revision_manager.rev_num}][Sub_rev: {self.revision_manager.subrev_num+1}]")
+                    top_window_copy.append(f"[{self.viewpoints.get_current_name()}][--Concatenate][Rev: {self.revision_manager.rev_num}][Sub_rev: {self.revision_manager.subrev_num+1}]")
                     top_window_copy.extend(response_text)
                     top_window_copy.append(f"'''")
                     top_window_copy.append(f"")
@@ -899,22 +946,6 @@ class AIQuickKeyEditor:
             if current_window["line_num"] >= len(current_window["text"]):
                 current_window["line_num"] = len(current_window["text"]) - 1
             self.adjust_window_offset()
-    def handle_sigint(self, sig, frame):
-        self.stdscr.addstr(38, 0, f'Ctrl-C, are you sure you want to exit? (Q/n/W), save your qk edit [{self.revision_manager.original_filename}], beforehand.', curses.A_REVERSE | curses.A_BOLD)
-        self.stdscr.refresh()
-        while True:
-            ch = self.stdscr.getch()
-            if ch == ord('Q'):
-                raise SystemExit
-            elif ch == ord('n') or ch == ord('N'):
-                self.display()
-                return
-            elif ch == ord('W') or ch == ord('w'):
-                self.write_file()
-                raise SystemExit
-    def handle_sigtstp(self, sig, frame):
-        self.status = 'pause'
-        self.display()
     def handle_del_key(self):
         current_window = self.windows[self.context_window]
         line = current_window["text"][current_window["line_num"]]
@@ -1002,6 +1033,23 @@ class AIQuickKeyEditor:
             self.show_left_column = not self.show_left_column
             self.status = "bell"
             self.display()
+    def handle_sigint(self, sig, frame):
+        self.stdscr.addstr(38, 0, f'Ctrl-C, are you sure you want to exit? (Q/n/W), save your qk edit [{self.revision_manager.original_filename}], beforehand.', curses.A_REVERSE | curses.A_BOLD)
+        self.stdscr.refresh()
+        while True:
+            ch = self.stdscr.getch()
+            if ch == ord('Q'):
+                raise SystemExit
+            elif ch == ord('n') or ch == ord('N'):
+                self.display()
+                return
+            elif ch == ord('W'):
+                self.write_file()
+                raise SystemExit
+    def handle_sigtstp(self, sig, frame):
+        self.status = 'pause'
+        self.context_window = 1
+        self.display()
     def run(self):
         while True:
             self.display()
@@ -1036,12 +1084,10 @@ class AIQuickKeyEditor:
             "Use the arrow keys to navigate.",
             "",
             "Try:",
-            #"Crtl-A to switch to the AI command window,",
             "Type: 'Write a script that prints the Fibonacci series up to 89 inclusive.'",
             "Crtl-V to change viewpoint to Spelling.",
             "Depress the \\ key to fix spelling, inline, in the AI command window,",
             "Crtl-V to change viewpoint to Python Coder.",
-            #"Be sure to Ctrl-A back to the editor window,",
             "Press the \\ key to send your request to AI.",
             "Crtl-E to execute your code.",
             "",
@@ -1066,5 +1112,4 @@ def main(stdscr):
 
 if __name__ == "__main__":
     curses.wrapper(main)
-
 
