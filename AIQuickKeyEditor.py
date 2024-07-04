@@ -731,11 +731,11 @@ class AIQuickKeyEditor:
                                         top_window_copy[end_pos:]
                                     )
                                 break
-                        if insert_pos is None and not object_name:
-                            indent = ' ' * 4
-                            new_code = ""
-                            new_code += [indent + l for l in func_code.split('\n')]
-                            top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}[--new]\n'''", new_code, ""])
+                        #if insert_pos is None and not object_name:
+                        #    indent = ' ' * 4
+                        #    new_code = ""
+                        #    new_code += [indent + l for l in func_code.split('\n')]
+                        #    top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}[--new]\n'''", new_code, ""])
                 if 'Markup' in textops:
                     for function in objects:
                         func_name = function['name']
@@ -773,11 +773,11 @@ class AIQuickKeyEditor:
                                     top_window_copy[end_pos:]
                                 )
                                 break
-                        if insert_pos is None and not object_name:
-                            indent = ' ' * 4
-                            new_code = ""
-                            new_code += [indent + l for l in func_code.split('\n')]
-                            top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}[--new]\n'''", new_code, ""])
+                        #if insert_pos is None and not object_name:
+                        #    indent = ' ' * 4
+                        #    new_code = ""
+                        #    new_code += [indent + l for l in func_code.split('\n')]
+                        #    top_window_copy.extend([f"\n''' [{self.viewpoints.get_current_name()}[--new]\n'''", new_code, ""])
                     top_window_copy.append(f"'''")
                     top_window_copy.append(f"[{self.viewpoints.get_current_name()}][--Concatenate][Rev: {self.revision_manager.rev_num}][Sub_rev: {self.revision_manager.subrev_num+1}]")
                     top_window_copy.extend(response_text)
